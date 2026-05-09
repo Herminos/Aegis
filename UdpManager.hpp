@@ -4,9 +4,15 @@
 #include<memory>
 #include<boost/asio.hpp>
 #include<vector>
+#include"Encryptor.hpp"
 
 using namespace boost::asio;
 using namespace std;
+
+enum ROLE{
+    SENDER,
+    ACCEPTER
+};
 
 class UdpBroadcaster{
 
@@ -32,7 +38,15 @@ class UdpListener{
         std::vector<char> recv_buffer;
         std::function<void(const std::vector<char>&)> msg_handler;
     public:
-        UdpListener(io_context &io, std::function<void(const std::vector<char>&)> msg_handler ,int port=12345 );
+        UdpListener(io_context &io, std::function<void(const std::vector<char>&)> msg_handler ,short port);
 
         void listen();
+};
+
+class UdpManager{
+    private:
+        UdpListener listener;
+        UdpBroadcaster broadcaster;
+    public:
+        UdpManager(io_context& _io, std::function<void(const std::vector<char>&)> msg_handler, Encryptor &encryptor);
 };

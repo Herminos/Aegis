@@ -23,7 +23,9 @@ add_executable(AEGIS
                 UdpManager.cpp
                 UdpManager.hpp
                 TcpManager.cpp
+                TcpManager.hpp
                 SessionManager.cpp
+                Encryptor.hpp
                 )
 
 # ==========================================

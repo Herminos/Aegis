@@ -941,4 +941,10 @@ CMakeFiles/AEGIS.dir/SessionManager.cpp.obj: \
  C:/msys64/ucrt64/include/boost/asio/windows/stream_handle.hpp \
  C:/msys64/ucrt64/include/boost/asio/writable_pipe.hpp \
  C:/msys64/ucrt64/include/boost/asio/write_at.hpp \
- C:/msys64/ucrt64/include/boost/asio/impl/write_at.hpp
+ C:/msys64/ucrt64/include/boost/asio/impl/write_at.hpp \
+ C:/msys64/ucrt64/include/c++/15.2.0/map \
+ C:/msys64/ucrt64/include/c++/15.2.0/bits/stl_tree.h \
+ C:/msys64/ucrt64/include/c++/15.2.0/bits/stl_map.h \
+ C:/msys64/ucrt64/include/c++/15.2.0/bits/stl_multimap.h \
+ C:\Users\hermi\Desktop\Aegis\Encryptor.cpp \
+ C:\Users\hermi\Desktop\Aegis\TcpManager.hpp

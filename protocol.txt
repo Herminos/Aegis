@@ -1,3 +1,12 @@
-4 Bytes | Fixed magic number : 2 6 a 2
-4 Bytes | The length of the following message
-x Bytes | Message body()
+AEGIS UDP Protocol AUP in JSON
+{
+    "app":"AEGIS"
+    "ver":$(current_vesion)
+    "type":"BROADCAST"/"REPLY"/"CANCLE"
+    //BROADCAST is for phase 1
+    //When you receive other's BROADCAST, you send a REPLY to confirm the connection
+    //When you decided to shut down your AEGIS
+    "hash":$(the SHA-256 of the sender's pub key)
+    "port":$(The sender's available port to connect)
+    "name":$(the sender's nickname)
+}

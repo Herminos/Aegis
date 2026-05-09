@@ -1,12 +1,17 @@
 #include"UdpManager.hpp"
+#include"Utility.hpp"
 #include<stdio.h>
 #include<memory>
 #include<boost/asio.hpp>
+#include<boost/json.hpp>
 #include<vector>
 #include<string>
 
 using namespace boost::asio;
+namespace json = boost::json;
 using namespace std;
+
+
 
 
 UdpBroadcaster::UdpBroadcaster(io_context &_io, int port) 
@@ -14,8 +19,8 @@ UdpBroadcaster::UdpBroadcaster(io_context &_io, int port)
 {
     socket.open(ip::udp::v4());
     socket.set_option(socket_base::broadcast(true));
-    socket.bind(ip::udp::endpoint(ip::udp::v4(), 0));
     remote_endpoint = ip::udp::endpoint(ip::address_v4::broadcast(), port);
+    //socket.bind(ip::udp::endpoint(ip::udp::v4(), port));
 }
 
 void UdpBroadcaster::broadcast(const string& msg) 
@@ -72,12 +77,13 @@ void UdpBroadcaster::stop_broadcasting()
 }
 
 
-UdpListener::UdpListener(io_context &io, std::function<void(const std::vector<char>&)> msg_handler, int port)
+UdpListener::UdpListener(io_context &io, std::function<void(const std::vector<char>&)> msg_handler, short port)
     : socket(io), msg_handler(msg_handler) 
 {
     socket.open(ip::udp::v4());
     socket.bind(ip::udp::endpoint(ip::udp::v4(), port));
     recv_buffer.resize(1024);
+    socket.set_option(socket_base::reuse_address(true));
 }
 
 void UdpListener::listen() 
@@ -93,9 +99,49 @@ void UdpListener::listen()
                        remote_endpoint.address().to_string().c_str(), 
                        remote_endpoint.port());
                 
-                msg_handler(recv_buffer); // 调用消息处理函数
+                msg_handler(
+                    std::vector<char>(recv_buffer.begin(), recv_buffer.begin() + bytes_transferred)
+                ); // 调用消息处理函数
                 this->listen();           // 递归调用，继续监听下一条
             }
         }
     );
 }
+
+void hello_msg_handler(const std::vector<char>& msg){
+    
+    try{
+        json::value val=json::parse(json::string_view(msg.data(), msg.size()));
+        json::object obj=val.as_object();
+        if(auto app=obj.if_contains("app")){
+            if(obj.at["app"].as_string()!="AEGIS")
+                return;
+        }
+
+
+    }
+    catch(exception e){
+
+    }
+    
+}
+
+UdpManager::UdpManager(io_context& _io, std::function<void(const std::vector<char>&)> msg_handler, Encryptor &encryptor)
+  :  broadcaster(_io, 12345), listener(_io, msg_handler,12345)
+{
+    string hash="0x00000000";
+    //hash=encryptor.get_hash();
+    broadcaster.broadcast(make_hello_content(hash, "12345"));
+    listener.listen();
+
+};
+
+string make_hello_content(const string& hash, const string& tcp_port){
+    boost::json::object obj;
+    obj["app"]="AEGIS";
+    obj["ver"]=CURRENT_VERSION;
+    obj["type"]="HELLO";
+    obj["hash"]=hash;
+    obj["port"]=tcp_port;
+    return boost::json::serialize(obj);
+};
