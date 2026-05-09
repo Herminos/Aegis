@@ -1,0 +1,26 @@
+[
+{
+  "directory": "C:/Users/hermi/Desktop/Aegis/build",
+  "command": "C:\\msys64\\ucrt64\\bin\\g++.exe   -g -std=gnu++17 -o CMakeFiles\\AEGIS.dir\\main.cpp.obj -c C:\\Users\\hermi\\Desktop\\Aegis\\main.cpp",
+  "file": "C:/Users/hermi/Desktop/Aegis/main.cpp",
+  "output": "CMakeFiles/AEGIS.dir/main.cpp.obj"
+},
+{
+  "directory": "C:/Users/hermi/Desktop/Aegis/build",
+  "command": "C:\\msys64\\ucrt64\\bin\\g++.exe   -g -std=gnu++17 -o CMakeFiles\\AEGIS.dir\\UdpManager.cpp.obj -c C:\\Users\\hermi\\Desktop\\Aegis\\UdpManager.cpp",
+  "file": "C:/Users/hermi/Desktop/Aegis/UdpManager.cpp",
+  "output": "CMakeFiles/AEGIS.dir/UdpManager.cpp.obj"
+},
+{
+  "directory": "C:/Users/hermi/Desktop/Aegis/build",
+  "command": "C:\\msys64\\ucrt64\\bin\\g++.exe   -g -std=gnu++17 -o CMakeFiles\\AEGIS.dir\\TcpManager.cpp.obj -c C:\\Users\\hermi\\Desktop\\Aegis\\TcpManager.cpp",
+  "file": "C:/Users/hermi/Desktop/Aegis/TcpManager.cpp",
+  "output": "CMakeFiles/AEGIS.dir/TcpManager.cpp.obj"
+},
+{
+  "directory": "C:/Users/hermi/Desktop/Aegis/build",
+  "command": "C:\\msys64\\ucrt64\\bin\\g++.exe   -g -std=gnu++17 -o CMakeFiles\\AEGIS.dir\\SessionManager.cpp.obj -c C:\\Users\\hermi\\Desktop\\Aegis\\SessionManager.cpp",
+  "file": "C:/Users/hermi/Desktop/Aegis/SessionManager.cpp",
+  "output": "CMakeFiles/AEGIS.dir/SessionManager.cpp.obj"
+}
+]

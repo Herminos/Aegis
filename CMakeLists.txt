@@ -1,0 +1,42 @@
+cmake_minimum_required(VERSION 3.10)
+project(AEGIS)
+
+# 强制使用现代 C++17 标准
+set(CMAKE_CXX_STANDARD 17)
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
+
+# ==========================================
+# 第一步：寻找第三方密码学和网络库
+# ==========================================
+# 通过 pkg-config 寻找 Libsodium
+find_package(PkgConfig REQUIRED)
+pkg_check_modules(SODIUM REQUIRED libsodium)
+
+# 寻找 Boost 库 (Asio 主要是 Header-only，所以找到头文件即可)
+#find_package(Boost REQUIRED)
+
+# ==========================================
+# 第二步：生成可执行文件 (你的 P2P 节点)
+# ==========================================
+add_executable(AEGIS 
+                main.cpp
+                UdpManager.cpp
+                UdpManager.hpp
+                TcpManager.cpp
+                SessionManager.cpp
+                )
+
+# ==========================================
+# 第三步：链接头文件与系统库 (极其关键)
+# ==========================================
+target_include_directories(AEGIS PRIVATE 
+    ${SODIUM_INCLUDE_DIRS} 
+    ${Boost_INCLUDE_DIRS}
+)
+
+# 针对 Windows 环境的特殊处理：链接底层网卡驱动库
+target_link_libraries(AEGIS PRIVATE 
+    ${SODIUM_LIBRARIES}
+    ws2_32    # Windows Socket 核心 API (必须有)
+    mswsock   # Windows Socket 高级扩展
+)
