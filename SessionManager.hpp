@@ -21,7 +21,7 @@ class Session:public enable_shared_from_this<Session>
         const string& session_hash;
 
         void on_read_loop();
-        std::vector<char> recv_buffer;
+        boost::asio::streambuf read_buffer;
 
         void send_msg(const string& msg);
         std::deque<std::string> msg_queue;

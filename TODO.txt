@@ -1,3 +1,5 @@
-完成Session类的start()方法
-设计AEGIS Encrypted TCP Protocol(AETP协议)
+设计Aegis Encrypted TCP Protocol(AETP协议)
 
+完成Encryptor类，实现加密解密逻辑
+
+对Session加入状态机，包括PUBKEY_EXCHANGING, WAITING_FOR_AES_KEY, VERIFYING, ESTABLISHED

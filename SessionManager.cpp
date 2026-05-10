@@ -23,7 +23,18 @@ void Session::start(){
 
 void Session::on_read_loop(){
     auto self(shared_from_this());
-
+    boost::asio::async_read_until(socket, read_buffer, '\n',
+        [self, this](const boost::system::error_code& ec, size_t bytes_transferred) {
+            if(!ec){
+                istream is(&read_buffer);
+                string msg;
+                getline(is, msg);
+                //处理消息
+                on_read_loop();
+            }
+        }
+    
+    );
 };
 
 void Session::send_msg(const string& msg) {   
