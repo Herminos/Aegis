@@ -942,4 +942,5 @@ CMakeFiles/AEGIS.dir/main.cpp.obj: C:\Users\hermi\Desktop\Aegis\main.cpp \
  C:/msys64/ucrt64/include/boost/asio/windows/stream_handle.hpp \
  C:/msys64/ucrt64/include/boost/asio/writable_pipe.hpp \
  C:/msys64/ucrt64/include/boost/asio/write_at.hpp \
- C:/msys64/ucrt64/include/boost/asio/impl/write_at.hpp
+ C:/msys64/ucrt64/include/boost/asio/impl/write_at.hpp \
+ C:\Users\hermi\Desktop\Aegis\Encryptor.hpp

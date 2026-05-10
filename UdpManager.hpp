@@ -9,10 +9,6 @@
 using namespace boost::asio;
 using namespace std;
 
-enum ROLE{
-    SENDER,
-    ACCEPTER
-};
 
 class UdpBroadcaster{
 
@@ -20,7 +16,7 @@ class UdpBroadcaster{
         UdpBroadcaster(io_context &_io, int port=12345);
         void broadcast(const string& msg);
         void wait(const boost::system::error_code& e, std::shared_ptr<string> shared_msg, short time=1);
-    
+        void send_reply(const ip::udp::endpoint& target_ep, const string& msg);
         void stop_broadcasting();
         
     private:
@@ -36,9 +32,9 @@ class UdpListener{
         ip::udp::socket socket;
         ip::udp::endpoint remote_endpoint;
         std::vector<char> recv_buffer;
-        std::function<void(const std::vector<char>&)> msg_handler;
+        function<void(const std::vector<char>&, const ip::udp::endpoint&)> msg_handler;
     public:
-        UdpListener(io_context &io, std::function<void(const std::vector<char>&)> msg_handler ,short port);
+        UdpListener(io_context &io, function<void(const std::vector<char>&, const ip::udp::endpoint&)> ,short port);
 
         void listen();
 };
@@ -47,6 +43,17 @@ class UdpManager{
     private:
         UdpListener listener;
         UdpBroadcaster broadcaster;
+        void on_broadcast_handler(const boost::json::object& msg_obj, const ip::udp::endpoint& sender_ep);
+        void on_listened_handler(const std::vector<char>& msg, const ip::udp::endpoint& sender_ep);
+        function <void(const ip::tcp::endpoint&, const string&, const string&)> on_session_handler;
+
+        string make_reply_content();
+        string make_broadcast_content();
+        bool check_if_AUP(const boost::json::object &obj);
+        const string& my_hash;
+        const string& my_name;
+        const string& my_tcp_port;
     public:
-        UdpManager(io_context& _io, std::function<void(const std::vector<char>&)> msg_handler, Encryptor &encryptor);
+        UdpManager(io_context& _io, Encryptor &encryptor, const string& name, const string& available_tcp_port);
+        void set_on_session_handler(function<void(const ip::tcp::endpoint&, const string&, const string&)> handler) { on_session_handler = handler; };
 };

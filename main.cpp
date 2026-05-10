@@ -2,7 +2,10 @@
 #include<functional>
 #include<thread>
 #include"UdpManager.hpp"
+#include"SessionManager.hpp"
+#include"Encryptor.hpp"
 #include<boost/asio.hpp>
+#include<boost/json/src.hpp>
 
 using namespace boost::asio;
 
@@ -24,19 +27,30 @@ int main() {
     }
 }*/
 
-int true_main(){
+int main(){
+
+    io_context io;
+    string my_name="Herminos";
+
+    SessionManager session_manager(io);
+    Encryptor encryptor;
+    UdpManager udp_manager(io, encryptor, my_name);
+
+    const string my_hash="0x12345678";
+    //my_hash=encryptor.get_hash();
 
 
-    /*
-    新建udp广播接收
-    收到广播：
-    通知SessionManager新建Session实例
-        if 我是发送者
-            发送
-        if 我是接收者
-            接受
-        如果五秒内未连接，超时处理
-    
-    
-    */
+    udp_manager.set_on_session_handler(
+        [&session_manager, &io](const ip::tcp::endpoint& remote_endpoint, const string& hash, const string& name) {
+            
+            session_manager.new_session(
+                remote_endpoint.address().to_string(),
+                to_string(remote_endpoint.port()),
+                hash,
+                name
+            );
+        }
+
+    );
+
 }
