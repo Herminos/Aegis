@@ -10,19 +10,21 @@ using namespace std;
 
 
 
-TcpSender::TcpSender(io_context &_io, short port) : acceptor(_io), socket(_io) {
-    acceptor.open(ip::tcp::v4());
+TcpSender::TcpSender(io_context &_io, short port) : acceptor(_io, ip::tcp::endpoint(ip::tcp::v4(), port)), socket(_io) {
+
 };
 
 void TcpSender::accept() {
-    acceptor.bind(ip::tcp::endpoint(ip::tcp::v4(), 8023));
-    acceptor.listen();
-    acceptor.async_accept(socket, [this](const boost::system::error_code& e) {
+
+    acceptor.async_accept([this](const boost::system::error_code& e, ip::tcp::socket peer_socket) {
         if (e) {
             printf("[ERROR] Accept error: %s\n", e.message().c_str());
             return;
         }
-        printf("[INFO] Client connected: %s\n", socket.remote_endpoint().address().to_string().c_str());
-
+        printf("[INFO] Client connected: %s\n", peer_socket.remote_endpoint().address().to_string().c_str());
+        if (accept_handler) {
+            accept_handler(move(peer_socket));
+        }
+        accept();
     });
 };

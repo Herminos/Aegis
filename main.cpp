@@ -30,11 +30,12 @@ int main() {
 int main(){
 
     io_context io;
+    thread_pool pool;
     string my_name="Herminos";
 
     SessionManager session_manager(io);
-    Encryptor encryptor;
-    UdpManager udp_manager(io, encryptor, my_name);
+    Encryptor encryptor(pool);
+    UdpManager udp_manager(io, encryptor, my_name, "12345");
 
     const string my_hash="0x12345678";
     //my_hash=encryptor.get_hash();

@@ -50,9 +50,9 @@ class UdpManager{
         string make_reply_content();
         string make_broadcast_content();
         bool check_if_AUP(const boost::json::object &obj);
-        const string& my_hash;
-        const string& my_name;
-        const string& my_tcp_port;
+        const string my_hash;
+        const string my_name;
+        const string my_tcp_port;
     public:
         UdpManager(io_context& _io, Encryptor &encryptor, const string& name, const string& available_tcp_port);
         void set_on_session_handler(function<void(const ip::tcp::endpoint&, const string&, const string&)> handler) { on_session_handler = handler; };

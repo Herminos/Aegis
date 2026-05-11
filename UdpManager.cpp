@@ -203,7 +203,7 @@ void UdpManager::on_listened_handler(const std::vector<char>& msg, const ip::udp
 
 void UdpManager::on_broadcast_handler(const boost::json::object& msg_obj, const ip::udp::endpoint& sender_ep) {
 
-    if(msg_obj.at("hash").as_string().c_str() > my_hash){//此时对方哈希值比我方大，对方为发送方，我方需REPLY让对方创建连接
+    if(std::string_view(msg_obj.at("hash").as_string()) > my_hash){//此时对方哈希值比我方大，对方为发送方，我方需REPLY让对方创建连接
         this->broadcaster.send_reply(sender_ep, make_reply_content());
     }
     else{//我方哈希值大于对方，我方创建连接

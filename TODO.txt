@@ -2,4 +2,4 @@
 
 完成Encryptor类，实现加密解密逻辑
 
-对Session加入状态机，包括PUBKEY_EXCHANGING, WAITING_FOR_AES_KEY, VERIFYING, ESTABLISHED
+根据状态机完成Session的handle_incoming_message成员函数
