@@ -1,7 +1,8 @@
 Network Working Group                                         H. Herminos
+
 Internet-Draft                                               May 12, 2026
+
 Category: Standards Track
-Expires: November 13, 2026
 
 # AETP: Aegis Encrypted Transport Protocol v1.0.0
 *(Draft Specification)*
