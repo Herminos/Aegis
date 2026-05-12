@@ -131,10 +131,10 @@ void UdpListener::listen()
 
 string UdpManager::make_broadcast_content(){
     boost::json::object obj;
-    obj["app"]="AEGIS";
+    obj["app"]="AUP";
     obj["ver"]=CURRENT_VERSION;
     obj["type"]="BROADCAST";
-    obj["hash"]=my_hash;
+    obj["id"]=my_id;
     obj["port"]=my_tcp_port;
     obj["name"]=my_name;
     return boost::json::serialize(obj);
@@ -145,7 +145,7 @@ UdpManager::UdpManager(io_context& _io, Encryptor &encryptor, const string& name
     [this](const std::vector<char>& msg, const ip::udp::endpoint& sender) {
         this->on_listened_handler(msg, sender);
     }
-    ,12345), my_hash(encryptor.get_hash()), my_name(name), my_tcp_port(available_tcp_port)
+    ,12345), my_id(encryptor.get_id()), my_name(name), my_tcp_port(available_tcp_port)
 {
     broadcaster.broadcast(make_broadcast_content());
     listener.listen();
@@ -155,11 +155,11 @@ UdpManager::UdpManager(io_context& _io, Encryptor &encryptor, const string& name
 bool UdpManager::check_if_AUP(const boost::json::object& obj) {
 
     auto app = obj.if_contains("app");
-    if (!app || !app->is_string() || app->as_string() != "AEGIS") return false;
+    if (!app || !app->is_string() || app->as_string() != "AUP") return false;
     auto ver = obj.if_contains("ver");
     if (!ver || !ver->is_string() || ver->as_string() != CURRENT_VERSION) return false;
-    if (!obj.contains("type") || !obj.contains("hash") || !obj.contains("port")) return false;
-    if (obj.at("hash").as_string() == my_hash) return false; 
+    if (!obj.contains("type") || !obj.contains("id") || !obj.contains("port")) return false;
+    if (obj.at("id").as_string() == my_id) return false; 
 
     return true;
 }
@@ -167,11 +167,11 @@ bool UdpManager::check_if_AUP(const boost::json::object& obj) {
 string UdpManager::make_reply_content(){
 
     boost::json::object obj;
-    obj["app"]="AEGIS";
+    obj["app"]="AUP";
     obj["ver"]=CURRENT_VERSION;
     obj["port"]=my_tcp_port;
     obj["type"]="REPLY";
-    obj["hash"]=my_hash;
+    obj["id"]=my_id;
     obj["name"]=my_name;
     return boost::json::serialize(obj);
 
@@ -190,7 +190,7 @@ void UdpManager::on_listened_handler(const std::vector<char>& msg, const ip::udp
         else if(obj.at("type")=="REPLY"){
             this->on_session_handler(
                 ip::tcp::endpoint(sender_ep.address(), stoi(obj.at("port").as_string().c_str()))
-                , obj.at("hash").as_string().c_str(), obj.at("name").as_string().c_str());
+                , obj.at("id").as_string().c_str(), obj.at("name").as_string().c_str());
         }
 
 
@@ -203,13 +203,13 @@ void UdpManager::on_listened_handler(const std::vector<char>& msg, const ip::udp
 
 void UdpManager::on_broadcast_handler(const boost::json::object& msg_obj, const ip::udp::endpoint& sender_ep) {
 
-    if(std::string_view(msg_obj.at("hash").as_string()) > my_hash){//此时对方哈希值比我方大，对方为发送方，我方需REPLY让对方创建连接
+    if(std::string_view(msg_obj.at("id").as_string()) > my_id){//此时对方哈希值比我方大，对方为发送方，我方需REPLY让对方创建连接
         this->broadcaster.send_reply(sender_ep, make_reply_content());
     }
     else{//我方哈希值大于对方，我方创建连接
         this->on_session_handler(
                 ip::tcp::endpoint(sender_ep.address(), stoi(msg_obj.at("port").as_string().c_str()))
-                , msg_obj.at("hash").as_string().c_str(), msg_obj.at("name").as_string().c_str());
+                , msg_obj.at("id").as_string().c_str(), msg_obj.at("name").as_string().c_str());
         
     }
 

@@ -1,0 +1,12 @@
+AEGIS UDP Protocol AUP in JSON
+{
+    "app":"AUP",
+    "ver":$(current_vesion),
+    "type":"BROADCAST"/"REPLY"/"CANCLE",
+    //BROADCAST is for phase 1
+    //When you receive other's BROADCAST, you send a REPLY to confirm the connection
+    //When you decided to shut down your AEGIS
+    "hash":$(the SHA of the sender's pub key in Base64),
+    "port":$(The sender's available port to connect),
+    "name":$(the sender's nickname),
+}

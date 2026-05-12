@@ -50,7 +50,7 @@ class UdpManager{
         string make_reply_content();
         string make_broadcast_content();
         bool check_if_AUP(const boost::json::object &obj);
-        const string my_hash;
+        const string my_id;
         const string my_name;
         const string my_tcp_port;
     public:

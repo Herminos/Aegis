@@ -57,7 +57,7 @@ std::vector<uint8_t> base64_to_bin(const std::string& b64) {
     return bin;
 }
 
-string Encryptor::get_hash() {
+string Encryptor::get_id() {
     return bin_to_base64(public_key);
 }
 

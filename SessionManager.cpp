@@ -11,14 +11,14 @@ using namespace boost::asio;
 using namespace std;
 
 
-Session::Session(io_context &_io, const string& ip_addr, string port, const string& name, const string& hash, Encryptor &encryptor) :
-    socket(_io), remote_endpoint(ip::make_address_v4(ip_addr), stoi(port)), session_name(name), session_hash(hash), encryptor(encryptor)
+Session::Session(io_context &_io, const string& ip_addr, string port, const string& name, const string& id, Encryptor &encryptor) :
+    socket(_io), remote_endpoint(ip::make_address_v4(ip_addr), stoi(port)), session_name(name), session_id(id), encryptor(encryptor)
 {
     socket.open(ip::tcp::v4());
 }
 
-Session::Session(io_context &_io, ip::tcp::socket socket, const string& name, const string& hash, Encryptor &encryptor) :
-    socket(move(socket)), remote_endpoint(this->socket.remote_endpoint()), session_name(name), session_hash(hash), encryptor(encryptor)
+Session::Session(io_context &_io, ip::tcp::socket socket, const string& name, const string& id, Encryptor &encryptor) :
+    socket(move(socket)), remote_endpoint(this->socket.remote_endpoint()), session_name(name), session_id(id), encryptor(encryptor)
 {
     
 };
@@ -67,13 +67,13 @@ void Session::close_session(const boost::system::error_code& ec) {
     }
 
     if (on_close_handler) {
-        on_close_handler(session_hash);
+        on_close_handler(session_id);
 
         on_close_handler = nullptr; 
     }
 
     printf("[WARN] Session %s (%s) disconnected. Reason: %s\n", 
-           session_name.c_str(), session_hash.c_str(), ec.message().c_str());
+           session_name.c_str(), session_id.c_str(), ec.message().c_str());
 }
 
 // 在你的异步读写中，一旦捕获错误，立刻调用它：
@@ -103,51 +103,51 @@ SessionManager::SessionManager(io_context &_io, Encryptor &encryptor) : io(_io) 
 
 };
 
-void SessionManager::new_session(const string& ip_addr, const string& port, const string& session_hash, const string& name) {
+void SessionManager::new_session(const string& ip_addr, const string& port, const string& session_id, const string& name) {
 
-    if(session_map.find(session_hash) != session_map.end()) {
-        printf("[WARN] Session with hash %s already exists. Skipping creation.\n", session_hash.c_str());
+    if(session_map.find(session_id) != session_map.end()) {
+        printf("[WARN] Session with id %s already exists. Skipping creation.\n", session_id.c_str());
         return;
     }
 
-    auto session=make_shared<Session>(io, ip_addr, port, name, session_hash, encryptor);
+    auto session=make_shared<Session>(io, ip_addr, port, name, session_id, encryptor);
     
-    session->set_on_close_handler([this](const string& hash) {
-        boost::asio::post(io, [this, hash](){
-            size_t erased = session_map.erase(hash);
+    session->set_on_close_handler([this](const string& id) {
+        boost::asio::post(io, [this, id](){
+            size_t erased = session_map.erase(id);
             if (erased > 0) {
-                printf("[INFO] Session with hash %s removed from session manager.\n", hash.c_str());
+                printf("[INFO] Session with id %s removed from session manager.\n", id.c_str());
             } else {
-                printf("[WARN] Attempted to remove session with hash %s, but it was not found in session manager.\n", hash.c_str());
+                printf("[WARN] Attempted to remove session with id %s, but it was not found in session manager.\n", id.c_str());
             }
 
         });
     });
 
-    session_map[session_hash]=session;
+    session_map[session_id]=session;
     session->start(); //start the session
 
 }
 
-void SessionManager::new_session_from_socket_and_start(ip::tcp::socket socket, const string& session_hash, const string& name) {
-    if(session_map.find(session_hash) != session_map.end()) {
-        printf("[WARN] Session with hash %s already exists. Skipping creation.\n", session_hash.c_str());
+void SessionManager::new_session_from_socket_and_start(ip::tcp::socket socket, const string& session_id, const string& name) {
+    if(session_map.find(session_id) != session_map.end()) {
+        printf("[WARN] Session with id %s already exists. Skipping creation.\n", session_id.c_str());
         return;
     }
-    auto session=make_shared<Session>(io, move(socket), name, session_hash, encryptor);
+    auto session=make_shared<Session>(io, move(socket), name, session_id, encryptor);
     
-    session->set_on_close_handler([this](const string& hash) {
-        boost::asio::post(io, [this, hash](){
-            size_t erased = session_map.erase(hash);
+    session->set_on_close_handler([this](const string& id) {
+        boost::asio::post(io, [this, id](){
+            size_t erased = session_map.erase(id);
             if (erased > 0) {
-                printf("[INFO] Session with hash %s removed from session manager.\n", hash.c_str());
+                printf("[INFO] Session with id %s removed from session manager.\n", id.c_str());
             } else {
-                printf("[WARN] Attempted to remove session with hash %s, but it was not found in session manager.\n", hash.c_str());
+                printf("[WARN] Attempted to remove session with id %s, but it was not found in session manager.\n", id.c_str());
             }
 
         });
     });
 
-    session_map[session_hash]=session;
+    session_map[session_id]=session;
     session->on_read_loop();
 }

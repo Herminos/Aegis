@@ -11,7 +11,7 @@ class Encryptor {
         boost::asio::awaitable<std::vector<uint8_t>> encrypt(const std::vector<uint8_t> &data, const std::vector<uint8_t> &key, const std::vector<uint8_t> &nonce);
         std::vector<uint8_t> public_key;
         std::vector<uint8_t> private_key;
-        std::string get_hash();
+        std::string get_id();
     private:
         void generate_identity_key_pair();
         void load_identity_key_pair();
