@@ -12,22 +12,30 @@ AEGIS is a high-performanced, decentralized and encrypted network engine based o
 
 - **Self-Certifying and Decentralized**: Peer ID is based on the hash value (BLAKE3) of public key to reduce the risk of identity theft from the root.
 
-- **Highly-Secured**: Integrated libsodium uses ChaCha20-Poly1305 for encryption and Ed25519 for digital signature.
+- **Highly-Secured**: Integrated libsodium uses XChaCha20-Poly1305 for encryption and Ed25519 for digital signature.
 
 ## Build
 
 Environment requirements:
 - C++20 Compiler (MinGW or MSVC)
 - CMake
-- Boost.Asio
-- Libsodium
+- boost.asio,boost.json
+- libsodium
 
 `pwsh
+
 git clone https://github.com/Herminos/Aegis.git
+
 cd Aegis
+
 mkdir build
+
 cd build
+
 cmake ..
+
 cmake --build .
+
 ./AEGIS
+
 `
