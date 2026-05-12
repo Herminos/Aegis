@@ -1,69 +1,59 @@
 import os
 from pathlib import Path
-import datetime
 
-def pack_aegis_code():
-    # 配置区
-    target_dir = Path('.')
-    output_filename = 'aegis_full_context.txt'
-    # 核心修改：在这里加上了 '.txt'
-    target_extensions = {'.cpp', '.hpp', '.h', '.txt'} 
-    # 自动过滤掉 CMake 生成的编译测试文件和 git 历史
-    exclude_dirs = {'.git', 'build', 'out', 'bin', '.vscode'}
-
-    files_to_pack = []
+def create_review_snapshot():
+    # --- 1. 配置 (Configuration) ---
+    project_root = Path(__file__).parent
+    output_file = project_root / "aegis_review_snapshot.txt"
     
-    # 遍历目录
-    for file_path in target_dir.rglob('*'):
-        # 过滤排除目录
-        if any(exclude in file_path.parts for exclude in exclude_dirs):
-            continue
+    # 你需要关注的文件类型
+    target_extensions = {".cpp", ".hpp", ".txt", ".md"}
+    # 必须排除的目录，防止把编译产物或巨大的依赖打进去
+    ignored_dirs = {"build", ".git", ".vscode", "__pycache__", "third_party"}
+    
+    # 分隔符：让 AI 能清晰分辨文件边界
+    separator = "\n" + "="*80 + "\n"
+
+    print(f"🔍 正在扫描 Aegis 项目源码...")
+    
+    files_processed = 0
+
+    # --- 2. 写入流程 (Execution) ---
+    with open(output_file, "w", encoding="utf-8") as f_out:
+        f_out.write(f"AEGIS PROJECT SOURCE SNAPSHOT\nGenerated at: {Path.cwd()}\n")
+        f_out.write("="*80 + "\n\n")
+
+        # 递归遍历项目
+        for file_path in sorted(project_root.rglob("*")):
             
-        if file_path.is_file() and file_path.suffix in target_extensions:
-            # 过滤掉脚本自己生成的那个 txt 产物，防止无限套娃
-            if file_path.name == output_filename:
+            # 过滤逻辑
+            if any(part in ignored_dirs for part in file_path.parts):
                 continue
-            files_to_pack.append(file_path)
-
-    # 按文件路径字母顺序排序，让相关联的 cpp 和 hpp 挨在一起
-    files_to_pack.sort()
-
-    with open(output_filename, 'w', encoding='utf-8') as out:
-        # 1. 写入全局元数据
-        out.write("=== Aegis Codebase Context ===\n")
-        out.write(f"Generated at: {datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n")
-        out.write(f"Total files: {len(files_to_pack)}\n\n")
-
-        # 2. 写入项目结构索引
-        out.write("--- Project Structure ---\n")
-        for f in files_to_pack:
-            out.write(f"- {f.relative_to(target_dir)}\n")
-        out.write("\n========================================\n\n")
-
-        # 3. 逐个写入文件内容
-        for f in files_to_pack:
-            rel_path = f.relative_to(target_dir)
             
-            out.write(f"// " + "="*50 + "\n")
-            out.write(f"// --- [ FILE: {rel_path} ] ---\n")
-            out.write(f"// " + "="*50 + "\n")
-            
-            # 针对 txt 协议文档使用纯文本代码块，cpp 使用 cpp 代码块
-            if f.suffix == '.txt':
-                out.write("```text\n")
-            else:
-                out.write("```cpp\n")
+            if file_path.suffix in target_extensions and file_path.is_file():
+                # 跳过脚本自身，避免套娃
+                if file_path.name == Path(__file__).name or file_path.name == output_file.name:
+                    continue
                 
-            try:
-                with open(f, 'r', encoding='utf-8') as infile:
-                    out.write(infile.read())
-            except UnicodeDecodeError:
-                with open(f, 'r', encoding='gbk', errors='ignore') as infile:
-                    out.write(infile.read())
-            
-            out.write("\n```\n\n\n")
+                relative_path = file_path.relative_to(project_root)
+                print(f"  [+] 读取: {relative_path}")
+                
+                # 写入页眉：文件路径
+                f_out.write(separator)
+                f_out.write(f"FILE PATH: {relative_path}\n")
+                f_out.write(separator)
+                
+                # 写入内容
+                try:
+                    with open(file_path, "r", encoding="utf-8") as f_in:
+                        f_out.write(f_in.read())
+                    f_out.write("\n")
+                    files_processed += 1
+                except Exception as e:
+                    f_out.write(f"[ERROR] 无法读取文件: {e}\n")
 
-    print(f"[SUCCESS] 已经成功将 {len(files_to_pack)} 个文件（包含协议 txt）打包至 -> {output_filename}")
+    print(f"\n✅ 成功！全量快照已生成: {output_file.name}")
+    print(f"📊 共整合 {files_processed} 个源文件。你可以直接把这个文本文件的内容发给我。")
 
-if __name__ == '__main__':
-    pack_aegis_code()
+if __name__ == "__main__":
+    create_review_snapshot()

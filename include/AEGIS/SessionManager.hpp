@@ -1,21 +1,34 @@
+#pragma once
+
 #include<boost/asio.hpp>
 #include<stdio.h>
 #include<memory>
 #include<map>
 #include<deque>
 #include<functional>
-#include"Encryptor.hpp"
-#include"TcpManager.hpp"
+#include<AEGIS/Encryptor.hpp>
+#include<AEGIS/SessionManager.hpp>
 
 using namespace boost::asio;
 using namespace std;
 
 enum class SessionState{
+    IDLE,
     PUBKEY_EXCHANGING,
-    WAITING_FOR_SESSION_KEY,
-    VERIFYING_PEER,
-    WAITING_FOR_VERIFIED,
     ACTIVE,
+};
+
+enum class SessionRole{
+    CLIENT,
+    SERVER
+};
+
+struct AETPHeader{
+    uint16_t magic;
+    uint8_t version;
+    uint8_t type;
+    uint16_t payload_length;
+    uint8_t crc;
 };
 
 class Session:public enable_shared_from_this<Session>
@@ -23,31 +36,35 @@ class Session:public enable_shared_from_this<Session>
     private:
         ip::tcp::socket socket;
         ip::tcp::endpoint remote_endpoint;
-        SessionState state=SessionState::PUBKEY_EXCHANGING;//会话状态机，初始状态为公钥交换阶段
+        SessionState state;//会话状态机
         Encryptor &encryptor; //加密器实例，处理数据加密解密逻辑
 
         const string session_name;
         const string session_id;
 
+        EphemeralKeyPair my_ephemeral_keypair;
+        vector<uint8_t> peer_ephemeral_public_key;
+        SessionKeyPair session_key_pair;
+        std::vector<uint8_t> Session::build_handshake_package(const std::vector<uint8_t>& payload);
         
-        boost::asio::streambuf read_buffer;
+        boost::asio::awaitable<void> process_encrypted_data_coroutine(const std::vector<uint8_t>& data);
 
-        void send_msg(const string& msg);
-        std::deque<std::string> msg_queue;
-        void do_write();
         std::function<void(std::string)> on_close_handler;
         void close_session(const boost::system::error_code& ec);
+        void send_package(const vector<uint8_t>& package);
 
+        boost::asio::awaitable<void> send_package_coroutine(const vector<uint8_t>& package);
         void handle_incoming_message(const string& msg);
+        void handle_handshaking(const vector<uint8_t>& handshaking_payload);
        
-    public:
+    public:        
+        SessionRole role;
         void start(); //开始对话（仅限发起连接段）
-        void on_read_loop();
         Session(io_context &_io, const string& ip_addr, string port, const string& name, const string& id, Encryptor &encryptor);
         Session(io_context &_io, ip::tcp::socket socket, const string& name, const string& id, Encryptor &encryptor);
         ip::tcp::socket& get_socket();
         void set_on_close_handler(std::function<void(std::string)> handler) { on_close_handler = handler; }
-        
+        boost::asio::awaitable<void> start_read_loop_coroutine();
 };
 
 class SessionManager{

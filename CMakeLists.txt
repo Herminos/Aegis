@@ -14,18 +14,15 @@ pkg_check_modules(SODIUM REQUIRED libsodium)
 # 寻找 Boost 库 (Asio 主要是 Header-only，所以找到头文件即可)
 #find_package(Boost REQUIRED)
 
+file(GLOB_RECURSE AEGIS_SRC "*.cpp")
+file(GLOB_RECURSE AEGIS_HDR "*.hpp")
+
 # ==========================================
 # 第二步：生成可执行文件 (你的 P2P 节点)
 # ==========================================
 add_executable(AEGIS 
-                main.cpp
-                UdpManager.cpp
-                UdpManager.hpp
-                TcpManager.cpp
-                TcpManager.hpp
-                SessionManager.cpp
-                Encryptor.hpp
-                Encryptor.cpp
+    ${AEGIS_SRC}
+    ${AEGIS_HDR}
                 )
 
 # ==========================================
@@ -34,6 +31,8 @@ add_executable(AEGIS
 target_include_directories(AEGIS PRIVATE 
     ${SODIUM_INCLUDE_DIRS} 
     ${Boost_INCLUDE_DIRS}
+    PUBLIC
+    ${CMAKE_CURRENT_SOURCE_DIR}/include
 )
 
 # 针对 Windows 环境的特殊处理：链接底层网卡驱动库

@@ -1,3 +1,5 @@
+#pragma once
+
 #include<boost/asio.hpp>
 #include<stdio.h>
 #include<vector>

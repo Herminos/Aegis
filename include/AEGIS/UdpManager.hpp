@@ -4,7 +4,7 @@
 #include<memory>
 #include<boost/asio.hpp>
 #include<vector>
-#include"Encryptor.hpp"
+#include<AEGIS/Encryptor.hpp>
 
 using namespace boost::asio;
 using namespace std;

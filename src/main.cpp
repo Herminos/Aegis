@@ -1,9 +1,10 @@
 #include<stdio.h>
 #include<functional>
 #include<thread>
-#include"UdpManager.hpp"
-#include"SessionManager.hpp"
-#include"Encryptor.hpp"
+#include<AEGIS/Encryptor.hpp>
+#include<AEGIS/SessionManager.hpp>
+#include<AEGIS/TcpManager.hpp>
+#include<AEGIS/UdpManager.hpp>
 #include<boost/asio.hpp>
 #include<boost/json/src.hpp>
 
@@ -32,9 +33,9 @@ int main(){
     io_context io;
     thread_pool pool;
     string my_name="Herminos";
-
-    SessionManager session_manager(io);
     Encryptor encryptor(pool);
+    SessionManager session_manager(io, encryptor);
+    
     UdpManager udp_manager(io, encryptor, my_name, "12345");
 
     const string my_hash="0x12345678";
