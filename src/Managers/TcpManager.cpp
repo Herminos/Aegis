@@ -4,6 +4,7 @@
 #include<memory>
 #include<functional>
 #include<AEGIS/TcpManager.hpp>
+#include<AEGIS/Utility.hpp>
 
 using namespace boost::asio;
 using namespace std;
@@ -18,10 +19,10 @@ void TcpSender::accept() {
 
     acceptor.async_accept([this](const boost::system::error_code& e, ip::tcp::socket peer_socket) {
         if (e) {
-            printf("[ERROR] Accept error: %s\n", e.message().c_str());
+            log_error(string("[ERROR] Failed to accept incoming connection: ") + e.message());
             return;
         }
-        printf("[INFO] Client connected: %s\n", peer_socket.remote_endpoint().address().to_string().c_str());
+        success_info(string("[INFO] Client connected: ") + peer_socket.remote_endpoint().address().to_string());
         if (accept_handler) {
             accept_handler(move(peer_socket));
         }

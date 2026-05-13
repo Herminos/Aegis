@@ -6,6 +6,14 @@
 #include<string>
 #include<sodium.h>
 
+const std::string RESET   = "\033[0m";
+const std::string RED     = "\033[31m";
+const std::string GREEN   = "\033[32m";
+const std::string YELLOW  = "\033[33m";
+const std::string BLUE    = "\033[34m";
+const std::string CYAN    = "\033[36m";
+const std::string BOLD    = "\033[1m";
+
 inline std::string bin_to_base64(const std::vector<uint8_t>& bin) {
 
     size_t b64_len = sodium_base64_encoded_len(bin.size(), sodium_base64_VARIANT_ORIGINAL);
@@ -62,4 +70,21 @@ inline uint16_t calculate_header_crc16(const uint8_t* data, size_t length) {
         }
     }
     return crc;
+}
+
+inline void log_error(const string& error) {
+    printf("%s\n", (RED + error + RESET).c_str()); 
+}
+inline void log_warning(const string& warning) {
+    printf("%s\n", (YELLOW + warning + RESET).c_str());
+}
+inline void log_info(const string& info) {
+    //printf("%s\n", info.c_str());
+}
+inline void print_info(const string& info) {
+    printf("%s\n", info.c_str());
+}
+
+inline void success_info(const string& success) {
+    printf("%s\n", (GREEN + success + RESET).c_str());
 }

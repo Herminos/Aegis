@@ -9,7 +9,9 @@ using namespace boost::asio;
 
 Encryptor::Encryptor(thread_pool& pool) : _thread_pool(pool)
 {
-    sodium_init();
+    if(sodium_init() < 0) {
+        throw std::runtime_error("[ERROR] Failed to initialize libsodium.");
+    }
     
     load_identity_key_pair();
 

@@ -34,50 +34,65 @@ struct AETPHeader{
 class Session:public enable_shared_from_this<Session>
 {
     private:
+        std::deque<std::vector<uint8_t>> outgoing_package_queue;
         ip::tcp::socket socket;
         ip::tcp::endpoint remote_endpoint;
         SessionState state;//会话状态机
         Encryptor &encryptor; //加密器实例，处理数据加密解密逻辑
 
-        string session_name;
         string session_id;
 
         EphemeralKeyPair my_ephemeral_keypair;
         vector<uint8_t> peer_ephemeral_public_key;
         SessionKeyPair session_key_pair;
-        std::vector<uint8_t> build_handshake_package(const std::vector<uint8_t>& payload);
+        std::vector<uint8_t> build_package_from_payload(const std::vector<uint8_t>& payload, uint8_t type);
         
         boost::asio::awaitable<void> process_encrypted_data_coroutine(std::vector<uint8_t> data);
 
         std::function<void(std::string)> on_close_handler;
+        std::function<void(std::string, std::string)> on_session_promotion_handler;
         
         void send_package(vector<uint8_t> package);
+        void start_write_loop();
 
-        boost::asio::awaitable<void> send_package_coroutine(vector<uint8_t> package);
         void handle_incoming_message(const string& msg);
         void handle_handshaking(vector<uint8_t> handshaking_payload);
        
     public:        
         SessionRole role;
         void start(); //开始对话（仅限发起连接段）
-        Session(io_context &_io, const string& ip_addr, string port, const string& name, const string& id, Encryptor &encryptor);
-        Session(io_context &_io, ip::tcp::socket socket, const string& name, const string& id, Encryptor &encryptor);
-        ~Session(){printf("[INFO] Session %s destroyed.\n", session_name.c_str());};
+        Session(io_context &_io, const string& ip_addr, string port, const string& id, Encryptor &encryptor);
+        Session(io_context &_io, ip::tcp::socket socket, const string& id, Encryptor &encryptor);
+        ~Session();
         ip::tcp::socket& get_socket();
         void set_on_close_handler(std::function<void(std::string)> handler) { on_close_handler = handler; }
+        void set_on_session_promotion_handler(std::function<void(std::string, std::string)> handler) { on_session_promotion_handler = handler; }
         boost::asio::awaitable<void> start_read_loop_coroutine();
+        
         void close_session(const boost::system::error_code& ec);
+
+        void send_message(const string& msg);
+        
 };
 
 class SessionManager{
     private:
         Encryptor &encryptor;
+        string current_session_id;
         map<string, shared_ptr<Session>> session_map;
         io_context &io;
+        
     public:
         SessionManager(io_context &_io, Encryptor &encryptor);
-        void new_session(const string& ip_addr, const string& port, const string& session_id, const string& name);
-        void new_session_from_socket_and_start(ip::tcp::socket socket, const string& session_id, const string& name);//从socket创建会话并直接发起会话
+        void new_session(const string& ip_addr, const string& port);
+        void new_session_from_socket_and_start(ip::tcp::socket socket);//从socket创建会话并直接发起会话
         inline io_context& get_io_context() { return io; }
-        
-};
+        std::function<void(std::string)> on_receive_input_handler;
+        void set_on_receive_handler(std::function<void(std::string)> handler) {
+            on_receive_input_handler = handler;
+        }
+        void promote_session(const string& tmp_id, const string& actual_id);
+        bool if_has_session(const string& id) const {
+            return session_map.find(id) != session_map.end();
+        }
+};        

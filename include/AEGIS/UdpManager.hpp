@@ -46,15 +46,14 @@ class UdpManager{
         UdpBroadcaster broadcaster;
         void on_broadcast_handler(const boost::json::object& msg_obj, const ip::udp::endpoint& sender_ep);
         void on_listened_handler(const std::vector<char>& msg, const ip::udp::endpoint& sender_ep);
-        function <void(const ip::tcp::endpoint&, const string&, const string&)> on_session_handler;
+        function <void(const ip::tcp::endpoint&, const string&)> on_session_handler;
 
         string make_reply_content();
         string make_broadcast_content();
         bool check_if_AUP(const boost::json::object &obj);
         const string my_id;
-        const string my_name;
         const string my_tcp_port;
     public:
-        UdpManager(io_context& _io, Encryptor &encryptor, const string& name, const string& available_tcp_port);
-        void set_on_session_handler(function<void(const ip::tcp::endpoint&, const string&, const string&)> handler) { on_session_handler = handler; };
+        UdpManager(io_context& _io, Encryptor &encryptor, const string& available_tcp_port);
+        void set_on_session_handler(function<void(const ip::tcp::endpoint&, const string&)> handler) { on_session_handler = handler; };
 };

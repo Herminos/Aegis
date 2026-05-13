@@ -1,0 +1,1723 @@
+AEGIS PROJECT SOURCE SNAPSHOT
+Generated at: C:/Users/hermi/Desktop/Aegis
+================================================================================
+
+
+================================================================================
+FILE PATH: CMakeLists.txt
+
+================================================================================
+cmake_minimum_required(VERSION 3.10)
+project(AEGIS)
+
+set(CMAKE_CXX_STANDARD 20)
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
+
+# ==========================================
+# 第一步：寻找第三方密码学和网络库
+# ==========================================
+# 通过 pkg-config 寻找 Libsodium
+find_package(PkgConfig REQUIRED)
+pkg_check_modules(SODIUM REQUIRED libsodium)
+
+# 寻找 Boost 库 (Asio 主要是 Header-only，所以找到头文件即可)
+#find_package(Boost REQUIRED)
+
+file(GLOB_RECURSE AEGIS_SRC "src/*.cpp")
+file(GLOB_RECURSE AEGIS_HDR "include/*.hpp")
+
+# ==========================================
+# 第二步：生成可执行文件 (你的 P2P 节点)
+# ==========================================
+add_executable(AEGIS 
+    ${AEGIS_SRC}
+    ${AEGIS_HDR}
+                )
+ 
+# ==========================================
+# 第三步：链接头文件与系统库 (极其关键)
+# ==========================================
+target_include_directories(AEGIS PRIVATE 
+    ${SODIUM_INCLUDE_DIRS} 
+    ${Boost_INCLUDE_DIRS}
+    PUBLIC
+    ${CMAKE_CURRENT_SOURCE_DIR}/include
+)
+
+# 针对 Windows 环境的特殊处理：链接底层网卡驱动库
+target_link_libraries(AEGIS PRIVATE 
+    ${SODIUM_LIBRARIES}
+    ws2_32    # Windows Socket 核心 API (必须有)
+    mswsock   # Windows Socket 高级扩展
+)
+
+================================================================================
+FILE PATH: docs/AETP_SPEC.md
+
+================================================================================
+Network Working Group                                         H. Herminos
+
+Internet-Draft                                               May 12, 2026
+
+Category: Standards Track
+
+# AETP: Aegis Encrypted Transport Protocol v1.0.0
+*(Draft Specification)*
+
+## Abstract
+
+AETP is a secure application-layer transport protocol designed to run over TCP. Its primary objectives are to provide Aegis P2P nodes with resistance against Man-In-The-Middle (MITM) attacks, Perfect Forward Secrecy (PFS), and high-performance asynchronous data exchange. AETP utilizes a highly optimized 1-RTT cryptographic handshake.
+
+## Status of This Memo
+
+This document defines the standard implementation for the AETP Alpha 1.0.0 release.
+
+## 1. Introduction
+
+AETP segments the continuous TCP stream into discrete, deterministic frames using a strict binary header. All connection establishment procedures MUST adhere to a robust Finite State Machine (FSM) that binds long-term node identities to ephemeral session keys.
+
+## 2. Binary Framing
+
+Every AETP message MUST start with a fixed 10-byte header.
+
+```text
+
+    0                   1                   2                   3
+    0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1
+   +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+   |     Magic (0xAE 0x47)         |  Ver (0x01)   | Type (0xXX)   |
+   +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+   |                      Payload Length (N)                       |
+   +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+   |         CRC16 (Header)        |                               |
+   +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+                               |
+   |                                                               |
+   |                  Payload (N bytes)                            |
+   |                                                               |
+   +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+
+```
+
+**Fields:**
+* **Magic**: MUST be `0xAE 0x47` (Aegis Gate).
+* **Ver**: Protocol version. Current version is `0x01`.
+* **Type**:
+    * `0x01`: SENDING_PUBKEY (Handshake Packet)
+    * `0x02`: ENCRYPTED_DATA_TRANSMISSION (Application Data)
+    * `0xFF`: TERMINATED (Error / Socket Close)
+* **Length**: Payload byte count in Network Byte Order (Big-Endian).
+* **CRC16**: Checksum of the first 8 bytes (Header validation).
+
+## 3. Cryptographic Primitives
+
+AETP mandates the use of the `libsodium` library:
+* **Long-Term Identity & Signatures**: Ed25519
+* **Ephemeral Key Exchange**: Curve25519 (X25519)
+* **Authenticated Encryption**: XChaCha20-Poly1305-IETF
+
+## 4. Connection State Machine
+
+The Finite State Machine (FSM) for AETP is as follows:
+
+    enum class SessionState {
+       IDLE,
+       PUBKEY_EXCHANGING, // Client and Server exchange their long-term 
+                          // public key and ephemeral session public key, 
+                          // and a digital signature of ("AEGIS" + Ephemeral 
+                          // public key) using their own long-term private key.
+       ACTIVE,
+       TERMINATED
+    };
+
+Implementations MUST maintain the following transition logic:
+
+**[ Client Side (Initiator) ]**
+
+    [IDLE]
+       |
+       |-- (Generate Ephemeral Key pair)
+       |-- (Sign "AEGIS" + Ephemeral public key with long-term private key)
+       |-- (Send SENDING_PUBKEY) ----> [PUBKEY_EXCHANGING]
+       |
+    [PUBKEY_EXCHANGING]
+       |
+       |-- (Recv SENDING_PUBKEY)
+       |   |
+       |   |-- (Verify Peer's Signature)
+       |       |
+       |       |-- [Signature Valid] ----> (Compute Session Key) ----> [ACTIVE]
+       |       |-- [Signature Invalid] --> [TERMINATED]
+       |
+    [ACTIVE]
+       |
+       |-- (Recv ENCRYPTED_DATA_TRANSMISSION) ----> (Decrypt & Dispatch)
+       |-- (Auth Fail / MAC Error) -> [TERMINATED]
+       |
+    [TERMINATED]
+       |
+       |-- (Wipe Keys) ---> (Close Socket)
+
+**[ Server Side (Listener) ]**
+
+    [IDLE]
+       |
+       |-- (Accept Connection) ----> [PUBKEY_EXCHANGING]
+       |
+    [PUBKEY_EXCHANGING]
+       |
+       |-- (Recv SENDING_PUBKEY)
+       |-- (Verify Peer's Signature)
+       |   |-- [Signature Invalid] --> [TERMINATED]
+       |   |-- [Signature Valid] 
+       |       |-- (Generate Ephemeral Key Pair)
+       |       |-- (Compute Session Keys)
+       |       |-- (Sign "AEGIS" + Server's Ephemeral public key with Server's long-term private key)
+       |       |-- (Send SENDING_PUBKEY) ----> [ACTIVE]
+       |
+    [ACTIVE]
+       |
+       |-- (Recv ENCRYPTED_DATA_TRANSMISSION) ----> (Decrypt & Dispatch)
+       |-- (Auth Fail / MAC Error) --> [TERMINATED]
+
+## 5. Handshake Procedure (SENDING_PUBKEY)
+
+The payload for a Type `0x01` (`SENDING_PUBKEY`) message is exactly 128 bytes:
+
+    [ 32 Bytes: Long-Term Public Key (Ed25519) ]
+    [ 32 Bytes: Ephemeral Public Key (X25519)  ]
+    [ 64 Bytes: Detached Signature (Ed25519)   ]
+
+**Signature Generation:**
+The signature MUST be calculated over the following buffer:
+Context String (`"AEGIS"`) concatenated with the 32-byte Ephemeral Public Key.
+`crypto_sign_detached(sig, "AEGIS" || Ephemeral_PK, LongTerm_SK)`
+
+## 6. Application Payload (ENCRYPTED_DATA_TRANSMISSION)
+
+Once in the `[ACTIVE]` state, all Type `0x02` payloads MUST be encrypted.
+The structure of the payload is:
+
+    [ 24 Bytes: Nonce (monotonically increasing) ]
+    [ N  Bytes: Ciphertext (Encrypted JSON)      ]
+    [ 16 Bytes: MAC (Poly1305 Authenticator)     ]
+
+*(Note: `libsodium`'s `crypto_aead_xchacha20poly1305_ietf_encrypt` appends the MAC automatically).*
+
+## 7. Security Considerations
+
+* **Perfect Forward Secrecy**: Implementations MUST call `sodium_memzero()` on the `ephemeral_sk`, `rx_key`, and `tx_key` immediately upon entering the `[TERMINATED]` state or object destruction.
+* **Buffer Overflow**: Implementations MUST verify the Header `Length` field against a maximum threshold (e.g., 16MB) before allocating receive buffers.
+* **Identity Verification**: The Long-Term Public Key received in the handshake SHOULD be verified against the peer's UDP discovery broadcast.
+
+================================================================================
+FILE PATH: include/AEGIS/Encryptor.hpp
+
+================================================================================
+#pragma once
+
+#include<boost/asio.hpp>
+#include<boost/asio/use_awaitable.hpp>
+#include<sodium.h>
+
+using namespace std;
+using namespace boost::asio;
+
+struct EphemeralKeyPair {
+    std::vector<uint8_t> public_key;
+    std::vector<uint8_t> private_key;
+};
+
+struct SessionKeyPair{
+    std::vector<uint8_t> rx_key;
+    std::vector<uint8_t> tx_key;
+};
+
+class Encryptor {
+    public:
+        Encryptor(thread_pool &pool);
+        boost::asio::awaitable<std::vector<uint8_t>> async_encrypt(std::vector<uint8_t> data, std::vector<uint8_t> key, std::vector<uint8_t> nonce);
+        boost::asio::awaitable<std::vector<uint8_t>> async_decrypt(std::vector<uint8_t> cipher_and_mac, std::vector<uint8_t> nonce, std::vector<uint8_t> key);
+        std::vector<uint8_t> public_key;
+        std::vector<uint8_t> private_key;
+        bool verify_signature(const vector<uint8_t>& signature, const vector<uint8_t>& signed_msg, const vector<uint8_t>& peer_long_term_pk){
+                if(crypto_sign_verify_detached(
+                signature.data(),
+                signed_msg.data(),
+                signed_msg.size(),
+                peer_long_term_pk.data()
+            )==0)
+            {
+                return true;
+            } else {
+                return false;
+            }
+        }//这么简单的函数就写在这里了
+        std::vector<uint8_t> generate_signature(const std::vector<uint8_t>& message, const std::vector<uint8_t>& private_key);
+        EphemeralKeyPair generate_ephemeral_keypair();
+        SessionKeyPair derive_session_keys(
+                                bool if_client,
+                                const std::vector<uint8_t>& peer_ephemeral_pk,
+                                const std::vector<uint8_t>& my_ephemeral_pk,
+                                std::vector<uint8_t>& my_ephemeral_sk 
+                            );
+        std::string get_id();
+    private:
+        void generate_identity_key_pair();
+        void load_identity_key_pair();
+        std::vector<uint8_t> do_encrypt(const std::vector<uint8_t>& data, const std::vector<uint8_t>& public_key, const std::vector<uint8_t>& nonce);
+        std::vector<uint8_t> do_decrypt(const std::vector<uint8_t>& cipher_and_mac, const std::vector<uint8_t> nonce, const std::vector<uint8_t> key);
+        
+        boost::asio::thread_pool &_thread_pool;
+};
+
+================================================================================
+FILE PATH: include/AEGIS/InputManager.hpp
+
+================================================================================
+#pragma once
+
+#include<stdio.h>
+#include<string>
+#include<functional>
+#include<thread>
+
+class InputManager{
+
+    private:
+        std::thread input_thread;
+        std::function<void(std::string raw_msg)> message_sent_callback;
+        void input_loop();
+
+    public:
+        InputManager()=default;
+
+        void set_message_sent_callback(std::function<void(std::string raw_msg)> callback){
+            message_sent_callback = callback;
+        }
+        void start_input_loop();
+
+};
+
+================================================================================
+FILE PATH: include/AEGIS/SessionManager.hpp
+
+================================================================================
+#pragma once
+
+#include<boost/asio.hpp>
+#include<stdio.h>
+#include<memory>
+#include<map>
+#include<deque>
+#include<functional>
+#include<AEGIS/Encryptor.hpp>
+#include<AEGIS/Utility.hpp>
+
+using namespace boost::asio;
+using namespace std;
+
+enum class SessionState{
+    IDLE,
+    PUBKEY_EXCHANGING,
+    ACTIVE,
+};
+
+enum class SessionRole{
+    CLIENT,
+    SERVER
+};
+
+struct AETPHeader{
+    uint16_t magic;
+    uint8_t version;
+    uint8_t type;
+    uint32_t payload_length;
+    uint16_t crc;
+};
+
+class Session:public enable_shared_from_this<Session>
+{
+    private:
+        std::deque<std::vector<uint8_t>> outgoing_package_queue;
+        ip::tcp::socket socket;
+        ip::tcp::endpoint remote_endpoint;
+        SessionState state;//会话状态机
+        Encryptor &encryptor; //加密器实例，处理数据加密解密逻辑
+
+        string session_id;
+
+        EphemeralKeyPair my_ephemeral_keypair;
+        vector<uint8_t> peer_ephemeral_public_key;
+        SessionKeyPair session_key_pair;
+        std::vector<uint8_t> build_package_from_payload(const std::vector<uint8_t>& payload, uint8_t type);
+        
+        boost::asio::awaitable<void> process_encrypted_data_coroutine(std::vector<uint8_t> data);
+
+        std::function<void(std::string)> on_close_handler;
+        std::function<void(std::string, std::string)> on_session_promotion_handler;
+        
+        void send_package(vector<uint8_t> package);
+        void start_write_loop();
+
+        void handle_incoming_message(const string& msg);
+        void handle_handshaking(vector<uint8_t> handshaking_payload);
+       
+    public:        
+        SessionRole role;
+        void start(); //开始对话（仅限发起连接段）
+        Session(io_context &_io, const string& ip_addr, string port, const string& id, Encryptor &encryptor);
+        Session(io_context &_io, ip::tcp::socket socket, const string& id, Encryptor &encryptor);
+        ~Session();
+        ip::tcp::socket& get_socket();
+        void set_on_close_handler(std::function<void(std::string)> handler) { on_close_handler = handler; }
+        void set_on_session_promotion_handler(std::function<void(std::string, std::string)> handler) { on_session_promotion_handler = handler; }
+        boost::asio::awaitable<void> start_read_loop_coroutine();
+        
+        void close_session(const boost::system::error_code& ec);
+
+        void send_message(const string& msg);
+        
+};
+
+class SessionManager{
+    private:
+        Encryptor &encryptor;
+        string current_session_id;
+        map<string, shared_ptr<Session>> session_map;
+        io_context &io;
+        
+    public:
+        SessionManager(io_context &_io, Encryptor &encryptor);
+        void new_session(const string& ip_addr, const string& port);
+        void new_session_from_socket_and_start(ip::tcp::socket socket);//从socket创建会话并直接发起会话
+        inline io_context& get_io_context() { return io; }
+        std::function<void(std::string)> on_receive_input_handler;
+        void set_on_receive_handler(std::function<void(std::string)> handler) {
+            on_receive_input_handler = handler;
+        }
+        void promote_session(const string& tmp_id, const string& actual_id);
+};        
+
+
+================================================================================
+FILE PATH: include/AEGIS/TcpManager.hpp
+
+================================================================================
+#pragma once
+
+#include<boost/asio.hpp>
+#include<stdio.h>
+#include<vector>
+#include<memory>
+#include<functional>
+
+
+using namespace boost::asio;
+using namespace std;
+
+using AcceptHandler = function<void(ip::tcp::socket)>;
+
+class TcpSender{
+
+    private:
+        ip::tcp::socket socket;
+        ip::tcp::endpoint remote_endpoint;
+        ip::tcp::acceptor acceptor;
+        vector<char> recv_buffer;
+
+        AcceptHandler accept_handler;
+    public:
+        TcpSender(io_context &_io, short port);
+        void accept();
+
+        void set_accept_handler(AcceptHandler handler) { accept_handler = handler; }
+};
+
+================================================================================
+FILE PATH: include/AEGIS/UdpManager.hpp
+
+================================================================================
+#pragma once
+
+#include<stdio.h>
+#include<memory>
+#include<boost/asio.hpp>
+#include<boost/json.hpp>
+#include<vector>
+#include<AEGIS/Encryptor.hpp>
+
+using namespace boost::asio;
+using namespace std;
+
+
+class UdpBroadcaster{
+
+    public:
+        UdpBroadcaster(io_context &_io, int port=12345);
+        void broadcast(const string& msg);
+        void wait(const boost::system::error_code& e, std::shared_ptr<string> shared_msg, short time=1);
+        void send_reply(const ip::udp::endpoint& target_ep, const string& msg);
+        void stop_broadcasting();
+        
+    private:
+        ip::udp::socket socket;
+        ip::udp::endpoint remote_endpoint;
+        steady_timer timer;
+        bool if_still_broadcasting = true;
+        
+};
+
+class UdpListener{
+    private:
+        ip::udp::socket socket;
+        ip::udp::endpoint remote_endpoint;
+        std::vector<char> recv_buffer;
+        function<void(const std::vector<char>&, const ip::udp::endpoint&)> msg_handler;
+    public:
+        UdpListener(io_context &io, function<void(const std::vector<char>&, const ip::udp::endpoint&)> ,short port);
+
+        void listen();
+};
+
+class UdpManager{
+    private:
+        UdpListener listener;
+        UdpBroadcaster broadcaster;
+        void on_broadcast_handler(const boost::json::object& msg_obj, const ip::udp::endpoint& sender_ep);
+        void on_listened_handler(const std::vector<char>& msg, const ip::udp::endpoint& sender_ep);
+        function <void(const ip::tcp::endpoint&, const string&)> on_session_handler;
+
+        string make_reply_content();
+        string make_broadcast_content();
+        bool check_if_AUP(const boost::json::object &obj);
+        const string my_id;
+        const string my_tcp_port;
+    public:
+        UdpManager(io_context& _io, Encryptor &encryptor, const string& available_tcp_port);
+        void set_on_session_handler(function<void(const ip::tcp::endpoint&, const string&)> handler) { on_session_handler = handler; };
+};
+
+================================================================================
+FILE PATH: include/AEGIS/Utility.hpp
+
+================================================================================
+#pragma once
+
+#define CURRENT_VERSION "Alpha 0.1.0"
+
+#include<vector>
+#include<string>
+#include<sodium.h>
+
+const std::string RESET   = "\033[0m";
+const std::string RED     = "\033[31m";
+const std::string GREEN   = "\033[32m";
+const std::string YELLOW  = "\033[33m";
+const std::string BLUE    = "\033[34m";
+const std::string CYAN    = "\033[36m";
+const std::string BOLD    = "\033[1m";
+
+inline std::string bin_to_base64(const std::vector<uint8_t>& bin) {
+
+    size_t b64_len = sodium_base64_encoded_len(bin.size(), sodium_base64_VARIANT_ORIGINAL);
+    
+    std::string b64_str;
+    b64_str.resize(b64_len);
+
+    sodium_bin2base64(b64_str.data(), b64_str.size(), bin.data(), bin.size(), sodium_base64_VARIANT_ORIGINAL);
+
+    if (!b64_str.empty() && b64_str.back() == '\0') {
+        b64_str.pop_back();
+    }
+    return b64_str;
+}
+
+inline std::vector<uint8_t> base64_to_bin(const std::string& b64) {
+    if (b64.empty()) {
+        return {};
+    }
+
+    std::vector<uint8_t> bin(b64.size());
+    size_t actual_bin_len = 0;
+
+    int result = sodium_base642bin(
+        bin.data(),
+        bin.size(),
+        b64.data(),
+        b64.size(),
+        nullptr,
+        &actual_bin_len,
+        nullptr,
+        sodium_base64_VARIANT_ORIGINAL
+    );
+
+    if (result != 0) {
+        throw std::runtime_error("[Encryptor Error] Invalid Base64 string received.");
+    }
+
+    bin.resize(actual_bin_len);
+    
+    return bin;
+}
+
+inline uint16_t calculate_header_crc16(const uint8_t* data, size_t length) {
+    uint16_t crc = 0xFFFF;
+    for (size_t i = 0; i < length; ++i) {
+        crc ^= (static_cast<uint16_t>(data[i]) << 8);
+        for (int j = 0; j < 8; ++j) {
+            if (crc & 0x8000) {
+                crc = (crc << 1) ^ 0x1021;
+            } else {
+                crc <<= 1;
+            }
+        }
+    }
+    return crc;
+}
+
+inline void log_error(const string& error) {
+    printf("%s\n", (RED + error + RESET).c_str()); 
+}
+inline void log_warning(const string& warning) {
+    printf("%s\n", (YELLOW + warning + RESET).c_str());
+}
+inline void log_info(const string& info) {
+    //printf("%s\n", info.c_str());
+}
+inline void print_info(const string& info) {
+    printf("%s\n", info.c_str());
+}
+
+inline void success_info(const string& success) {
+    printf("%s\n", (GREEN + success + RESET).c_str());
+}
+
+================================================================================
+FILE PATH: README.md
+
+================================================================================
+# AEGIS
+
+AEGIS is a high-performanced, decentralized and encrypted network engine based on modern C++20 standard, boost.asio and libsodium.
+
+## Core Features
+
+- **Modern Async Architecture**: Using C++20 Coroutine and Boost.Asio and implementing a high-performanced network engine.
+
+- **Double Engine Scheduling**: Integrated thread pool allows AEGIS's encryption runs in parallel without blocking the IO thread.
+
+- **High-Performance**: Deeply applied Move Semantics to reduce memory copy and dangling pointer.
+
+- **Self-Certifying and Decentralized**: Peer ID is based on the hash value (BLAKE3) of public key to reduce the risk of identity theft from the root.
+
+- **Highly-Secured**: Integrated libsodium uses XChaCha20-Poly1305 for encryption and Ed25519 for digital signature.
+
+## Build
+
+Environment requirements:
+- C++20 Compiler (MinGW or MSVC)
+- CMake
+- boost.asio,boost.json
+- libsodium
+
+`pwsh
+
+git clone https://github.com/Herminos/Aegis.git
+
+cd Aegis
+
+mkdir build
+
+cd build
+
+cmake ..
+
+cmake --build .
+
+./AEGIS
+
+`
+
+================================================================================
+FILE PATH: src/crypto/Encryptor.cpp
+
+================================================================================
+#include<boost/asio.hpp>
+#include<boost/asio/use_awaitable.hpp>
+#include<sodium.h>
+#include<AEGIS/Encryptor.hpp>
+#include<AEGIS/Utility.hpp>
+
+using namespace std;
+using namespace boost::asio;
+
+Encryptor::Encryptor(thread_pool& pool) : _thread_pool(pool)
+{
+    if(sodium_init() < 0) {
+        throw std::runtime_error("[ERROR] Failed to initialize libsodium.");
+    }
+    
+    load_identity_key_pair();
+
+}
+
+
+string Encryptor::get_id() {
+    return bin_to_base64(public_key);
+}
+
+void Encryptor::generate_identity_key_pair() {
+    public_key.resize(crypto_sign_PUBLICKEYBYTES);
+    private_key.resize(crypto_sign_SECRETKEYBYTES);
+    crypto_sign_keypair(public_key.data(), private_key.data());
+}
+
+void Encryptor::load_identity_key_pair() {
+    //写一个判断是否有现成的PEM来加载
+    generate_identity_key_pair();
+}
+
+EphemeralKeyPair Encryptor::generate_ephemeral_keypair() {
+    EphemeralKeyPair keypair;
+
+    keypair.public_key.resize(crypto_kx_PUBLICKEYBYTES);
+    keypair.private_key.resize(crypto_kx_SECRETKEYBYTES);
+
+    int result = crypto_kx_keypair(
+        keypair.public_key.data(), 
+        keypair.private_key.data()
+    );
+
+    if (result != 0) {
+        throw std::runtime_error("[ERROR] Critical failure: Unable to generate ephemeral keypair.");
+    }
+
+    return keypair;
+}
+
+std::vector<uint8_t> Encryptor::do_encrypt(const std::vector<uint8_t>& data, const std::vector<uint8_t>& key, const std::vector<uint8_t>& nonce) {
+    std::vector<uint8_t> cipher_text(data.size()+crypto_aead_xchacha20poly1305_ietf_ABYTES);
+    unsigned long long len;
+
+    int result=crypto_aead_xchacha20poly1305_ietf_encrypt(
+        cipher_text.data(),
+        &len,
+        data.data(),
+        data.size(),
+        nullptr, 0,
+        nullptr,
+        nonce.data(),
+        key.data()
+    );
+    if(result!=0){
+        throw std::runtime_error("Encryption failed");
+    }
+    cipher_text.resize(len);
+    return cipher_text;
+}
+
+std::vector<uint8_t> Encryptor::do_decrypt(const std::vector<uint8_t>& cipher_and_mac, const std::vector<uint8_t> nonce, const std::vector<uint8_t> key) {
+
+    if (cipher_and_mac.size() < crypto_aead_xchacha20poly1305_ietf_ABYTES) {
+        throw std::runtime_error("[Encryptor] Ciphertext too short to contain a valid MAC.");
+    }
+
+    std::vector<uint8_t> plaintext(cipher_and_mac.size() - crypto_aead_xchacha20poly1305_ietf_ABYTES);
+    unsigned long long actual_plaintext_len = 0;
+
+    int result=crypto_aead_xchacha20poly1305_ietf_decrypt(
+        plaintext.data(),               // [OUT] 存放明文的缓冲区
+        &actual_plaintext_len,          // [OUT] 实际解密出的明文长度
+        nullptr,                        // [OUT] 这里不用管
+        cipher_and_mac.data(),          // [IN]  收到的密文（包含末尾的 MAC）
+        cipher_and_mac.size(),          // [IN]  密文总长度
+        nullptr,                        // [IN]  附加认证数据 (AD) - 你的协议目前没用到，填 nullptr
+        0,                              // [IN]  附加认证数据的长度
+        nonce.data(),                   // [IN]  24 字节的 Nonce
+        key.data()                      // [IN]  32 字节的 Session Key
+    );
+
+    if(result!=0){
+        throw std::runtime_error("[Encryptor] MAC verification failed! Payload tampered or invalid context.");
+    }
+
+    plaintext.resize(actual_plaintext_len);
+    return plaintext;
+}
+
+boost::asio::awaitable<std::vector<uint8_t>> Encryptor::async_encrypt(std::vector<uint8_t> data, std::vector<uint8_t> key, std::vector<uint8_t> nonce) {
+    auto io_executor = co_await boost::asio::this_coro::executor;
+    co_await boost::asio::post(_thread_pool, boost::asio::use_awaitable);
+
+    std::vector<uint8_t> cipher_text= do_encrypt(data, key, nonce);
+    
+    co_await boost::asio::post(io_executor, boost::asio::use_awaitable);
+    co_return cipher_text;
+}
+
+boost::asio::awaitable<std::vector<uint8_t>> Encryptor::async_decrypt(std::vector<uint8_t> cipher_and_mac, std::vector<uint8_t> nonce, std::vector<uint8_t> key) {
+    auto io_executor = co_await boost::asio::this_coro::executor;
+    co_await boost::asio::post(_thread_pool, boost::asio::use_awaitable);
+
+    std::vector<uint8_t> plain_text= do_decrypt(cipher_and_mac, nonce, key);
+    
+    co_await boost::asio::post(io_executor, boost::asio::use_awaitable);
+    co_return plain_text;
+};
+
+SessionKeyPair Encryptor::derive_session_keys(
+    bool if_client,
+    const std::vector<uint8_t>& peer_ephemeral_pk,
+    const std::vector<uint8_t>& my_ephemeral_pk,
+    std::vector<uint8_t>& my_ephemeral_sk 
+) {
+    if (peer_ephemeral_pk.size() != crypto_kx_PUBLICKEYBYTES ||
+        my_ephemeral_pk.size() != crypto_kx_PUBLICKEYBYTES ||
+        my_ephemeral_sk.size() != crypto_kx_SECRETKEYBYTES) {
+        throw std::invalid_argument("[Crypto] Invalid ephemeral key size provided to key derivation.");
+    }
+
+    SessionKeyPair keys;
+    keys.rx_key.resize(crypto_kx_SESSIONKEYBYTES);
+    keys.tx_key.resize(crypto_kx_SESSIONKEYBYTES);
+
+    int kx_result = -1;
+
+    if (if_client) {
+        kx_result = crypto_kx_client_session_keys(
+            keys.rx_key.data(), keys.tx_key.data(),
+            my_ephemeral_pk.data(), my_ephemeral_sk.data(),
+            peer_ephemeral_pk.data()
+        );
+    } else {
+        kx_result = crypto_kx_server_session_keys(
+            keys.rx_key.data(), keys.tx_key.data(),
+            my_ephemeral_pk.data(), my_ephemeral_sk.data(),
+            peer_ephemeral_pk.data()
+        );
+    }
+
+    sodium_memzero(my_ephemeral_sk.data(), my_ephemeral_sk.size());
+
+    if (kx_result != 0) {
+        throw std::runtime_error("[INFO]: ECDH Key Exchange failed. Weak peer key or bad entropy.");
+    }
+
+    return keys;
+}
+
+std::vector<uint8_t> Encryptor::generate_signature(const std::vector<uint8_t>& message, const std::vector<uint8_t>& private_key){
+
+    if (private_key.size() != crypto_sign_SECRETKEYBYTES) {
+        throw std::invalid_argument("[Crypto] Invalid Ed25519 secret key size.");
+    }
+
+    std::vector<uint8_t> signature(crypto_sign_BYTES);
+    unsigned long long sig_len = 0;
+
+    // 3. 执行签名动作
+    int result = crypto_sign_detached(
+        signature.data(),      // [OUT] 存放签名的缓冲区
+        &sig_len,              // [OUT] 实际生成的签名长度
+        message.data(),        // [IN]  要签名的原文数据
+        message.size(),        // [IN]  原文长度
+        private_key.data()    // [IN]  你的长期身份私钥
+    );
+
+    if (result != 0) {
+        throw std::runtime_error("[Crypto] Critical error: Ed25519 signature generation failed.");
+    }
+
+    signature.resize(sig_len);
+    return signature;
+}
+
+================================================================================
+FILE PATH: src/main.cpp
+
+================================================================================
+#include<stdio.h>
+#include<functional>
+#include<thread>
+#include<AEGIS/Encryptor.hpp>
+#include<AEGIS/SessionManager.hpp>
+#include<AEGIS/TcpManager.hpp>
+#include<AEGIS/UdpManager.hpp>
+#include<AEGIS/InputManager.hpp>
+#include<boost/asio.hpp>
+#include<boost/json/src.hpp>
+
+using namespace boost::asio;
+
+int main(int argc, char* argv[]) {
+
+    io_context io;
+    thread_pool pool;
+    Encryptor encryptor(pool);
+    SessionManager session_manager(io, encryptor);
+    
+    
+
+    if(argc <= 1) {
+        printf("Usage: %s <available_tcp_port>\n", argv[0]);
+        return 1;
+    }
+    string available_tcp_port=argv[1];
+
+    UdpManager udp_manager(io, encryptor, available_tcp_port);
+    TcpSender tcp_sender(io, stoi(available_tcp_port));
+    InputManager input_manager;
+
+    tcp_sender.set_accept_handler(
+        [&session_manager, &io](ip::tcp::socket peer_socket) {
+            session_manager.new_session_from_socket_and_start(move(peer_socket));
+        }
+    );
+    tcp_sender.accept();
+
+    udp_manager.set_on_session_handler(
+        [&session_manager, &io](const ip::tcp::endpoint& remote_endpoint, const string& hash) {
+            
+            session_manager.new_session(
+                remote_endpoint.address().to_string(),
+                to_string(remote_endpoint.port())
+            );
+        }
+    );
+
+    input_manager.set_message_sent_callback([session_manager](std::string data) {
+        session_manager.on_receive_input_handler(data);
+    });
+
+    input_manager.start_input_loop();
+    
+    try{
+        io.run();
+    } catch (const std::exception& e) {
+        log_error(string("[ERROR] Exception in main io_context: ") + e.what());
+    }
+    pool.join();
+    system("pause");
+}
+
+================================================================================
+FILE PATH: src/Managers/InputManager.cpp
+
+================================================================================
+#include<AEGIS/InputManager.hpp>
+#include<iostream>
+#include<boost/asio.hpp>
+#include<thread>
+
+using namespace boost::asio;
+using namespace std;
+
+void InputManager::start_input_loop() {
+    std::thread([this](){
+        input_loop();
+    }).detach();
+}
+
+void InputManager::input_loop() {
+    std::string line;
+    while(std::getline(std::cin, line)){
+        
+        if(line.empty()) continue;
+        message_sent_callback(move(line));
+    }
+}
+
+================================================================================
+FILE PATH: src/Managers/SessionManager.cpp
+
+================================================================================
+#include<boost/asio.hpp>
+#include<stdio.h>
+#include<memory>
+#include<map>
+#include<charconv>
+#include<AEGIS/Encryptor.hpp>
+#include<AEGIS/SessionManager.hpp>
+#include<AEGIS/TcpManager.hpp>
+#include<AEGIS/Utility.hpp>
+
+using namespace boost::asio;
+using namespace std;
+
+#define SENDING_PUBKEY 0x01
+#define SENDING_ENCRYPTED_DATA 0x02
+#define TERMINATED 0xFF
+
+inline AETPHeader parse_header(const array<uint8_t, 10> buffer){
+    AETPHeader header;
+    header.magic = (buffer[0] << 8) | buffer[1];
+    header.version = buffer[2];
+    header.type    = buffer[3];
+    header.payload_length = (static_cast<uint32_t>(buffer[4]) << 24) |
+                            (static_cast<uint32_t>(buffer[5]) << 16) |
+                            (static_cast<uint32_t>(buffer[6]) << 8)  |
+                            (static_cast<uint32_t>(buffer[7]));
+    header.crc = (buffer[8] << 8) | buffer[9];
+
+    return header;
+}
+
+inline std::vector<uint8_t> parse_nonce_from_payload(const std::vector<uint8_t>& payload){
+    std::vector<uint8_t> nonce(payload.begin(), payload.begin()+crypto_aead_xchacha20poly1305_ietf_NPUBBYTES);
+    return nonce;
+}
+
+inline std::vector<uint8_t> parse_cipher_and_mac_from_payload(const std::vector<uint8_t>& payload){
+    std::vector<uint8_t> cipher_and_mac(payload.begin()+crypto_aead_xchacha20poly1305_ietf_NPUBBYTES, payload.end());
+    return cipher_and_mac;
+}
+
+inline std::vector<uint8_t> build_handshake_payload(
+    const std::vector<uint8_t>& my_long_term_pk, // 32 字节 Ed25519 公钥
+    const std::vector<uint8_t>& my_long_term_sk, // 64 字节 Ed25519 私钥
+    const std::vector<uint8_t>& my_ephemeral_pk,  // 32 字节 X25519 临时公钥
+    Encryptor &e) {
+
+    std::vector<uint8_t> msg_to_sign;
+    std::string prefix = "AEGIS";
+    msg_to_sign.insert(msg_to_sign.end(), prefix.begin(), prefix.end());
+    msg_to_sign.insert(msg_to_sign.end(), my_ephemeral_pk.begin(), my_ephemeral_pk.end());
+
+    std::vector<uint8_t> signature = e.generate_signature(msg_to_sign, my_long_term_sk);
+
+    std::vector<uint8_t> payload;
+    payload.reserve(128);
+
+    payload.insert(payload.end(), my_long_term_pk.begin(), my_long_term_pk.end()); // [0~31]
+    payload.insert(payload.end(), my_ephemeral_pk.begin(), my_ephemeral_pk.end()); // [32~63]
+    payload.insert(payload.end(), signature.begin(), signature.end());             // [64~127]
+
+    return payload;
+}
+
+std::vector<uint8_t> Session::build_package_from_payload(const std::vector<uint8_t>& payload, uint8_t type) {
+    
+
+    std::array<uint8_t, 10> header;
+    header[0] = 0xAE; // Magic 1
+    header[1] = 0x47; // Magic 2
+    header[2] = 0x01; // Version
+    header[3] = type; // Type
+
+    uint32_t length = payload.size();
+    
+    header[4] = (length >> 24) & 0xFF;
+    header[5] = (length >> 16) & 0xFF;
+    header[6] = (length >> 8)  & 0xFF;
+    header[7] = length & 0xFF;
+
+    uint16_t crc = calculate_header_crc16(header.data(), 8);
+    header[8] = (crc >> 8) & 0xFF;
+    header[9] = crc        & 0xFF;
+
+    std::vector<uint8_t> package;
+    
+    package.reserve(header.size() + payload.size());
+    
+    package.insert(package.end(), header.begin(), header.end());
+    package.insert(package.end(), payload.begin(), payload.end());
+
+    return package;
+}
+
+Session::Session(io_context &_io, const string& ip_addr, string port, const string& id, Encryptor &encryptor) :
+    socket(_io), remote_endpoint(ip::make_address_v4(ip_addr), stoi(port)), session_id(id), encryptor(encryptor), state(SessionState::IDLE)
+{
+    socket.open(ip::tcp::v4());
+}
+
+Session::Session(io_context &_io, ip::tcp::socket socket, const string& id, Encryptor &encryptor) :
+    socket(move(socket)), remote_endpoint(this->socket.remote_endpoint()), session_id(id), encryptor(encryptor), state(SessionState::IDLE)
+{
+    
+};
+
+Session::~Session(){
+    log_info(string("[INFO] Session ") + session_id + " is being destroyed, cleaning up resources.");
+    
+    boost::system::error_code ec;
+    if (socket.is_open()) {
+        socket.close(ec);
+    }
+
+    // 2. 修复：防御性清零。只有当 vector 里真有数据时，才去碰它的内存！
+    if (!peer_ephemeral_public_key.empty()) {
+        sodium_memzero(peer_ephemeral_public_key.data(), peer_ephemeral_public_key.size());
+    }
+    if (!session_key_pair.rx_key.empty()) {
+        sodium_memzero(session_key_pair.rx_key.data(), session_key_pair.rx_key.size());
+    }
+    if (!session_key_pair.tx_key.empty()) {
+        sodium_memzero(session_key_pair.tx_key.data(), session_key_pair.tx_key.size());
+    }
+    if (!my_ephemeral_keypair.public_key.empty()) {
+        sodium_memzero(my_ephemeral_keypair.public_key.data(), my_ephemeral_keypair.public_key.size());
+    }
+    if (!my_ephemeral_keypair.private_key.empty()) {
+        sodium_memzero(my_ephemeral_keypair.private_key.data(), my_ephemeral_keypair.private_key.size());
+    }
+
+};
+
+void Session::start(){
+    auto self(shared_from_this());
+    print_info("[INFO] Starting session with ID: " + session_id + " to " + remote_endpoint.address().to_string() + ":" + to_string(remote_endpoint.port()));
+    socket.async_connect(remote_endpoint, [self](const boost::system::error_code& ec) {
+        if (ec) {
+            log_error(string("[ERROR] Failed to connect to ") + self->remote_endpoint.address().to_string() + ":" + to_string(self->remote_endpoint.port()) + " - " + ec.message());
+            return;
+        }
+        success_info(string("[INFO] Session ") + self->session_id + " connected to " + self->remote_endpoint.address().to_string() + ":" + to_string(self->remote_endpoint.port()));
+        boost::asio::co_spawn(
+            self->socket.get_executor(),
+            [self]() mutable -> boost::asio::awaitable<void> {
+                co_await self->start_read_loop_coroutine();
+            },
+            boost::asio::detached
+        );
+
+    });
+};
+
+
+boost::asio::awaitable<void> Session::start_read_loop_coroutine() {
+    auto self(shared_from_this());
+    try{
+        while(true){    
+            if(self->role == SessionRole::CLIENT && self->state == SessionState::IDLE){
+                self->my_ephemeral_keypair=self->encryptor.generate_ephemeral_keypair();
+                self->send_package(
+                    std::move(build_package_from_payload(
+                        build_handshake_payload(
+                            encryptor.public_key,
+                            encryptor.private_key,
+                            my_ephemeral_keypair.public_key,
+                            encryptor
+                        ), SENDING_PUBKEY
+                    ))
+                );
+                self->state=SessionState::PUBKEY_EXCHANGING;
+            }
+
+            std::array<uint8_t, 10> header_buffer;
+            co_await boost::asio::async_read(socket, boost::asio::buffer(header_buffer), boost::asio::use_awaitable);
+
+            
+
+            AETPHeader header=parse_header(header_buffer);
+            
+            if(header.magic != 0xAE47 || header.version != 0x01 || header.crc != calculate_header_crc16(header_buffer.data(), 8)){
+                //throw std::runtime_error("Invalid AETP header.");
+                log_error(string("[ERROR] Invalid AETP header received, ignoring this packet."));
+                if(header.magic != 0xAE47){
+                    throw std::runtime_error("Invalid magic number in header.");
+                }
+                if(header.version != 0x01){
+                    throw std::runtime_error("Unsupported AETP version.");
+                }
+                if(header.crc != calculate_header_crc16(header_buffer.data(), 8)){
+                    log_error(string("[ERROR] Header CRC16 mismatch. Expected: %04X, Received: %04X") + to_string(calculate_header_crc16(header_buffer.data(), 8)) + ", " + to_string(header.crc));
+                    throw std::runtime_error("Header CRC16 mismatch.");
+                }
+            }
+
+            if(header.payload_length >= 1*1024*1024*1024){
+                throw std::runtime_error("Payload over 1GB, too large");
+            }
+            if(header.type==0xFF){
+                throw std::runtime_error("Session terminated called by remote peer.");
+            }
+
+            std::vector<uint8_t> payload_buffer(header.payload_length);
+            co_await boost::asio::async_read(socket, boost::asio::buffer(payload_buffer), boost::asio::transfer_exactly(header.payload_length), boost::asio::use_awaitable);
+
+            if(header.type==0x01){
+                if(self->state == SessionState::ACTIVE){
+                    throw std::runtime_error("Session already active, receive PUBKEY_EXCHANGING packet.");
+                }
+                self->handle_handshaking(std::move(payload_buffer));
+            }
+
+            if(header.type==0x02){
+                if(self->state == SessionState::PUBKEY_EXCHANGING || self->state == SessionState::IDLE){
+                    throw std::runtime_error("Public key not exchaneged yet, receive ACTIVE packet.");
+                }
+                co_await self->process_encrypted_data_coroutine(payload_buffer);
+            }
+        }
+        
+    }
+    catch(const exception &e){
+        log_warning(string("[WARN] Session ") + session_id + " (" + remote_endpoint.address().to_string() + ":" + to_string(remote_endpoint.port()) + ") encountered an error: " + e.what() + ". Closing session.");
+        close_session(boost::asio::error::connection_aborted);
+    }
+};
+
+void Session::handle_handshaking(std::vector<uint8_t> handshaking_payload) {
+
+    if(handshaking_payload.size() != 128){
+        throw std::runtime_error("Invalid handshaking payload.");
+    }
+    vector<uint8_t> peer_long_term_pk(handshaking_payload.begin(), handshaking_payload.begin()+32);
+    vector<uint8_t> peer_ephemeral_pk(handshaking_payload.begin()+32, handshaking_payload.begin()+64);
+    vector<uint8_t> signature(handshaking_payload.begin()+64, handshaking_payload.end());
+    string calculated_id = bin_to_base64(peer_long_term_pk);
+    
+    
+
+    std::vector<uint8_t> signed_msg;
+    std::string prefix = "AEGIS";
+    signed_msg.reserve(prefix.size() + peer_ephemeral_pk.size());
+    signed_msg.insert(signed_msg.end(), prefix.begin(), prefix.end());
+    signed_msg.insert(signed_msg.end(), peer_ephemeral_pk.begin(), peer_ephemeral_pk.end());
+
+    if(!encryptor.verify_signature(signature, signed_msg, peer_long_term_pk)){
+        throw std::runtime_error("Invalid signature.");
+    };
+        success_info(string("[INFO] Session ") + session_id + ": Ed25519 signature verified.");
+        on_session_promotion_handler(session_id, calculated_id);
+        session_id = calculated_id;
+        if (role == SessionRole::SERVER && state == SessionState::IDLE) {
+        // 我是服务端：生成我的临时密钥，算出双向密钥，发回执，进入 ACTIVE
+        my_ephemeral_keypair = encryptor.generate_ephemeral_keypair();
+        session_key_pair = encryptor.derive_session_keys(false, peer_ephemeral_pk, my_ephemeral_keypair.public_key, my_ephemeral_keypair.private_key);
+    
+        send_package(
+            std::move(build_package_from_payload(
+                build_handshake_payload(
+                    encryptor.public_key,
+                    encryptor.private_key,
+                    my_ephemeral_keypair.public_key,
+                    encryptor
+                ), SENDING_PUBKEY)
+            )
+        );
+        state = SessionState::ACTIVE;
+        success_info(string("[INFO] Server Session ") + session_id + ": Keys derived, ACTIVE.");
+
+    } else if (role == SessionRole::CLIENT && state == SessionState::PUBKEY_EXCHANGING) {
+        // 我是客户端：用我之前存好的 my_ephemeral_keypair，算出双向密钥，进入 ACTIVE
+        session_key_pair = encryptor.derive_session_keys(true, peer_ephemeral_pk, my_ephemeral_keypair.public_key, my_ephemeral_keypair.private_key);
+    
+        state = SessionState::ACTIVE;
+        success_info(string("[INFO] Client Session ") + session_id + ": Keys derived, ACTIVE.");
+
+    } else {
+        throw std::runtime_error("Invalid state transition during handshake.");
+    }
+}
+
+boost::asio::awaitable<void> Session::process_encrypted_data_coroutine(std::vector<uint8_t> payload) {
+    vector<uint8_t> nonce(parse_nonce_from_payload(payload));
+    vector<uint8_t> cipher_and_mac(parse_cipher_and_mac_from_payload(payload));
+    vector<uint8_t> plain_text = co_await encryptor.async_decrypt(move(cipher_and_mac), move(nonce), session_key_pair.rx_key);
+    
+    handle_incoming_message(string(plain_text.begin(), plain_text.end()));
+
+};
+
+void Session::handle_incoming_message(const string& msg) {
+    print_info(string("\r\n[From " + session_id + "]: ") + msg);
+    // 这里可以添加更多的消息处理
+};
+
+void Session::close_session(const boost::system::error_code& ec) {
+    
+    if (socket.is_open()) {
+        boost::system::error_code ignored_ec;
+        socket.close(ignored_ec); 
+    }
+
+    if (on_close_handler) {
+        on_close_handler(session_id);
+
+        on_close_handler = nullptr; 
+    }
+
+    log_warning(string("[WARN] Session ") + session_id + " (" + remote_endpoint.address().to_string() + ":" + to_string(remote_endpoint.port()) + ") disconnected. Reason: " + ec.message());
+}
+
+void Session::send_package(vector<uint8_t> package) {
+    if(!socket.is_open()){
+        return;
+    }
+    auto self(shared_from_this());
+    boost::asio::post(
+        socket.get_executor(),
+        [self, package=move(package)]() mutable{
+            bool write_in_progress = !self->outgoing_package_queue.empty();
+            self->outgoing_package_queue.push_back(std::move(package));
+            if(!write_in_progress){
+                self->start_write_loop();
+            }
+        }
+    );
+}
+
+void Session::start_write_loop(){
+    auto self=shared_from_this();
+    boost::asio::co_spawn(
+        socket.get_executor(),
+        [self]() mutable -> boost::asio::awaitable<void> {
+            try{
+                while(!self->outgoing_package_queue.empty()){
+                    vector<uint8_t> package = self->outgoing_package_queue.front();
+                    co_await boost::asio::async_write(self->socket, boost::asio::buffer(package), boost::asio::use_awaitable);
+                    self->outgoing_package_queue.pop_front();
+                }
+            }
+            catch(const std::exception &e){
+                log_error(string("[ERROR] Failed to send package: ") + e.what());
+                self->close_session(boost::asio::error::fault);
+            }
+        },boost::asio::detached
+    );
+}
+
+void Session::send_message(const string& msg){
+    if(state != SessionState::ACTIVE){
+        print_info(string("[INFO] Session ") + session_id + " is not ACTIVE. Cannot send message.");
+        return;
+    }
+    std::vector<uint8_t> plain_text(msg.begin(), msg.end());
+    std::vector<uint8_t> nonce(crypto_aead_xchacha20poly1305_ietf_NPUBBYTES);
+    randombytes_buf(nonce.data(), nonce.size());
+    if(!socket.is_open()){
+        print_info(string("[INFO] Socket is closed. Cannot send message."));
+        return;
+    }
+    auto self(shared_from_this());
+    boost::asio::co_spawn(
+        socket.get_executor(),
+        [self, plain_text=std::move(plain_text), nonce=std::move(nonce)]() mutable -> boost::asio::awaitable<void> {
+            try{
+                std::vector<uint8_t> cipher_and_mac = co_await self->encryptor.async_encrypt(std::move(plain_text), self->session_key_pair.tx_key, nonce);
+                std::vector<uint8_t> payload;
+                payload.reserve(nonce.size() + cipher_and_mac.size());
+                payload.insert(payload.end(), nonce.begin(), nonce.end());
+                payload.insert(payload.end(), cipher_and_mac.begin(), cipher_and_mac.end());
+
+                self->send_package(self->build_package_from_payload(std::move(payload), SENDING_ENCRYPTED_DATA));
+            }
+            catch(const std::exception &e){
+                log_error(string("[ERROR] Failed to send message: ") + e.what());
+                self->close_session(boost::asio::error::fault);
+            }
+            co_return;
+        },
+        boost::asio::detached
+    );
+}
+
+
+inline ip::tcp::socket& Session::get_socket() {
+    return socket;
+};
+
+SessionManager::SessionManager(io_context &_io, Encryptor &encryptor) : io(_io) , encryptor(encryptor) {
+    on_receive_input_handler = [this](string raw_input) {
+        boost::asio::post(
+            io,
+            [this, raw_input=move(raw_input)](){
+                if(raw_input.empty()) return;
+                //这里以后可以写命令处理逻辑，如切换会话
+                if(current_session_id.empty()){
+                    print_info("No active session. Please select a session to send messages.");
+                    return;
+                }
+                auto it = session_map.find(current_session_id);
+                if(it == session_map.end()){
+                    print_info("Current session not found. Please select a valid session.");
+                    current_session_id = "";
+                    return;
+                }
+                it->second->send_message(raw_input);
+                print_info("\r[To "+current_session_id+"]: "+raw_input);
+                
+            }
+        );
+    };
+
+};
+
+void SessionManager::new_session(const string& ip_addr, const string& port) {
+
+    string map_key = "TEMP_ID_" + ip_addr + ":" + port;
+
+    if(session_map.find(map_key) != session_map.end()) {
+        log_info(string("[INFO] Session with id ") + map_key + " already exists. Skipping.");
+        return;
+    }
+
+    auto session=make_shared<Session>(io, ip_addr, port, map_key, encryptor);
+    
+    session->set_on_close_handler([this](const string& id) {
+        boost::asio::post(io, [this, id](){
+            size_t erased = session_map.erase(id);
+            if (erased > 0) {
+                log_info(string("[INFO] Session with id ") + id + " removed from session manager.");
+            } else {
+                log_warning(string("[WARN] Attempted to remove session with id ") + id + ", but it was not found in session manager.");
+            }
+
+        });
+    });
+
+    session->set_on_session_promotion_handler([this](const string& tmp_id, const string& actual_id) {
+        promote_session(tmp_id, actual_id);
+    });
+    session->role = SessionRole::CLIENT;
+    session_map[map_key]=session;
+    session->start(); //start the session
+
+}
+
+void SessionManager::new_session_from_socket_and_start(ip::tcp::socket socket) {
+
+    string map_key = "TEMP_ID_" + socket.remote_endpoint().address().to_string() + ":" + to_string(socket.remote_endpoint().port());
+
+    if(session_map.find(map_key) != session_map.end()) {
+        log_info(string("[INFO] Session with id ") + map_key + " already exists. Skipping.");
+        return;
+    }
+    auto session = make_shared<Session>(io, move(socket), map_key, encryptor);
+    session->role = SessionRole::SERVER;
+    
+    session->set_on_close_handler([this](const string& id) {
+        boost::asio::post(io, [this, id](){
+            size_t erased = session_map.erase(id);
+            if (erased > 0) {
+                log_info(string("[INFO] Session with id ") + id + " removed from session manager.");
+            } else {
+                log_warning(string("[WARN] Attempted to remove session id ") + id + ", but not found.");
+            }
+        });
+    });
+
+    session->set_on_session_promotion_handler([this](const string& tmp_id, const string& actual_id) {
+        promote_session(tmp_id, actual_id);
+    });
+    current_session_id = map_key;
+    session_map[map_key] = session;
+
+    // 2. 加上异常护盾的协程启动器
+    boost::asio::co_spawn(
+        io,
+        [session]() mutable -> boost::asio::awaitable<void> {
+            try {
+                co_await session->start_read_loop_coroutine();
+            } 
+            catch (const std::exception& e) {
+                log_error(string("[ERROR] Session connection violently broken: ") + e.what());
+                session->close_session(boost::asio::error::connection_aborted); 
+            }
+        },
+        boost::asio::detached
+    );
+}
+
+void SessionManager::promote_session(const string& tmp_id, const string& actual_id) {
+    if(session_map.find(actual_id) != session_map.end()) {
+        log_warning(string("[WARN] Attempted to promote session to actual id ") + actual_id + ", but it already exists. Dropping old session.");
+        session_map[actual_id]->close_session(boost::asio::error::connection_aborted);
+        session_map.erase(actual_id);
+    }
+    auto it = session_map.find(tmp_id);
+    if (it == session_map.end()) {
+        log_warning(string("[WARN] Attempted to promote session with temporary id ") + tmp_id + ", but it was not found.");
+        return;
+    }
+    auto session_ptr = it->second;
+    session_map.erase(it);
+    session_map[actual_id] = session_ptr;
+    current_session_id = actual_id;
+    log_info(string("[INFO] Session promoted from temporary id ") + tmp_id + " to actual id " + actual_id);
+}
+
+================================================================================
+FILE PATH: src/Managers/TcpManager.cpp
+
+================================================================================
+#include<boost/asio.hpp>
+#include<stdio.h>
+#include<vector>
+#include<memory>
+#include<functional>
+#include<AEGIS/TcpManager.hpp>
+#include<AEGIS/Utility.hpp>
+
+using namespace boost::asio;
+using namespace std;
+
+
+
+TcpSender::TcpSender(io_context &_io, short port) : acceptor(_io, ip::tcp::endpoint(ip::tcp::v4(), port)), socket(_io) {
+
+};
+
+void TcpSender::accept() {
+
+    acceptor.async_accept([this](const boost::system::error_code& e, ip::tcp::socket peer_socket) {
+        if (e) {
+            log_error(string("[ERROR] Failed to accept incoming connection: ") + e.message());
+            return;
+        }
+        success_info(string("[INFO] Client connected: ") + peer_socket.remote_endpoint().address().to_string());
+        if (accept_handler) {
+            accept_handler(move(peer_socket));
+        }
+        accept();
+    });
+};
+
+================================================================================
+FILE PATH: src/Managers/UdpManager.cpp
+
+================================================================================
+#include<AEGIS/UdpManager.hpp>
+#include<AEGIS/Encryptor.hpp>
+#include<AEGIS/Utility.hpp>
+#include<stdio.h>
+#include<memory>
+#include<boost/asio.hpp>
+#include<boost/json.hpp>
+#include<vector>
+#include<string>
+
+using namespace boost::asio;
+namespace json = boost::json;
+using namespace std;
+
+
+UdpBroadcaster::UdpBroadcaster(io_context &_io, int port) 
+    : socket(_io), timer(_io) 
+{
+    socket.open(ip::udp::v4());
+    socket.set_option(socket_base::broadcast(true));
+    remote_endpoint = ip::udp::endpoint(ip::address_v4::broadcast(), port);
+    //socket.bind(ip::udp::endpoint(ip::udp::v4(), port));
+}
+
+void UdpBroadcaster::broadcast(const string& msg) 
+{
+    if (!if_still_broadcasting) {
+        log_info(string("[INFO] Stopped broadcasting."));
+        socket.close();
+        timer.cancel();
+        return;
+    }
+
+    auto shared_msg = make_shared<string>(msg);
+
+    socket.async_send_to(buffer(*shared_msg), remote_endpoint, 
+        [shared_msg, this](const boost::system::error_code& e, std::size_t bytes_transferred) {
+            if (e) {
+                log_error(string("[ERROR] Error broadcasting: ") + e.message());
+                return;
+            } else {
+                log_info(string("[INFO] Broadcasted %zu bytes") + to_string(bytes_transferred));
+                log_info(string("[INFO] Message: ") + *shared_msg);
+
+                // 调用类成员 wait 继续定时任务
+                this->wait(e, shared_msg); 
+            }
+        }
+    );
+}
+
+
+void UdpBroadcaster::wait(const boost::system::error_code& e, std::shared_ptr<string> shared_msg, short time) 
+{
+    if (e) {
+        log_error(string("[ERROR] Timer error: ") + e.message());
+        if_still_broadcasting = false;
+        return;
+    }
+    
+    timer.expires_after(std::chrono::seconds(time));
+    timer.async_wait([this, shared_msg](const boost::system::error_code& e) {
+        if (e) {
+            log_error(string("[ERROR] Timer error: ") + e.message());
+            if_still_broadcasting = false;
+            return;
+        }
+        log_info(string("[INFO] Continuing broadcast..."));
+        this->broadcast(*shared_msg); // 继续广播同一消息
+    });
+}
+
+void UdpBroadcaster::stop_broadcasting() 
+{
+    if_still_broadcasting = false;
+}
+
+void UdpBroadcaster::send_reply(const ip::udp::endpoint& target_ep, const string& msg) {
+
+    auto shared_msg = make_shared<string>(msg);
+
+    socket.async_send_to(
+        buffer(*shared_msg), target_ep,
+        [shared_msg, target_ep](const boost::system::error_code& e, std::size_t bytes_transferred) {
+            if(e){
+                log_error(string("[ERROR] Error sending reply: ") + e.message());
+                return;
+            }
+            log_info(string("[INFO] Reply sent %zu bytes to %s:%d") + to_string(bytes_transferred) + target_ep.address().to_string() + to_string(target_ep.port()));
+        }
+
+        
+    );
+    
+}
+
+
+UdpListener::UdpListener(io_context &io, function<void(const std::vector<char>&, const ip::udp::endpoint&)> msg_handler ,short port)
+    : socket(io), msg_handler(msg_handler)
+{
+    socket.open(ip::udp::v4());
+    socket.set_option(socket_base::reuse_address(true));
+    socket.bind(ip::udp::endpoint(ip::udp::v4(), port));
+    recv_buffer.resize(1024);
+    
+}
+
+void UdpListener::listen() 
+{
+    socket.async_receive_from(buffer(recv_buffer), remote_endpoint, 
+        [this](const boost::system::error_code& e, std::size_t bytes_transferred) {
+            if (e) {
+                log_error(string("[ERROR] Error receiving UDP message: ") + e.message());
+                return;
+            } else {
+                log_info(string("[INFO] Received %zu bytes from %s:%d") + to_string(bytes_transferred) + remote_endpoint.address().to_string() + to_string(remote_endpoint.port()));
+                
+                msg_handler(
+                    std::vector<char>(recv_buffer.begin(), recv_buffer.begin() + bytes_transferred),
+                    remote_endpoint
+                ); // 调用消息处理函数
+                this->listen();
+            }
+        }
+    );
+}
+
+
+string UdpManager::make_broadcast_content(){
+    boost::json::object obj;
+    obj["app"]="AUP";
+    obj["ver"]=CURRENT_VERSION;
+    obj["type"]="BROADCAST";
+    obj["id"]=my_id;
+    obj["port"]=my_tcp_port;
+    return boost::json::serialize(obj);
+};
+
+UdpManager::UdpManager(io_context& _io, Encryptor &encryptor, const string& available_tcp_port)
+  :  broadcaster(_io, 12345), listener(_io,
+    [this](const std::vector<char>& msg, const ip::udp::endpoint& sender) {
+        this->on_listened_handler(msg, sender);
+    }
+    ,12345), my_id(encryptor.get_id()), my_tcp_port(available_tcp_port)
+{
+    broadcaster.broadcast(make_broadcast_content());
+    listener.listen();
+
+};
+
+bool UdpManager::check_if_AUP(const boost::json::object& obj) {
+
+    auto app = obj.if_contains("app");
+    if (!app || !app->is_string() || app->as_string() != "AUP") return false;
+    auto ver = obj.if_contains("ver");
+    if (!ver || !ver->is_string() || ver->as_string() != CURRENT_VERSION) return false;
+    if (!obj.contains("type") || !obj.contains("id") || !obj.contains("port")) return false;
+    if (obj.at("id").as_string() == my_id) return false; 
+    log_info(string("[INFO] Received valid AUP message from ") + obj.at("id").as_string().c_str() + ":" + obj.at("port").as_string().c_str());
+    return true;
+}
+
+string UdpManager::make_reply_content(){
+
+    boost::json::object obj;
+    obj["app"]="AUP";
+    obj["ver"]=CURRENT_VERSION;
+    obj["port"]=my_tcp_port;
+    obj["type"]="REPLY";
+    obj["id"]=my_id;
+    return boost::json::serialize(obj);
+
+};
+
+void UdpManager::on_listened_handler(const std::vector<char>& msg, const ip::udp::endpoint& sender_ep) {
+
+    try{
+        boost::json::value val=boost::json::parse(string_view(msg.data(), msg.size()));
+        const boost::json::object obj=val.as_object();
+        if(!check_if_AUP(obj)){
+            //log_info(string("[INFO] Received non-AUP or malformed message from ") + sender_ep.address().to_string() + ":" + to_string(sender_ep.port()));
+            return;
+        }
+
+        if(obj.at("type")=="BROADCAST"){
+            log_info(string("[INFO] Received BROADCAST from ") + obj.at("id").as_string().c_str() + ":" + obj.at("port").as_string().c_str());
+            if(obj.at("id").as_string() == my_id) {
+                log_info(string("[INFO] Ignoring own BROADCAST message."));
+                return;
+            } //过滤掉自己发来的广播
+
+            if(obj.at("id").as_string() > my_id) {
+                log_info(string("[INFO] Received BROADCAST with larger ID from ") + obj.at("id").as_string().c_str() + ":" + obj.at("port").as_string().c_str() + ", ignoring...");
+                return;
+            };//我方为接收方，等待对方回复创建连接
+            
+            this->on_broadcast_handler(obj, sender_ep);
+        }
+        else if(obj.at("type")=="REPLY"){
+            log_info(string("[INFO] Received REPLY from ") + obj.at("id").as_string().c_str() + ":" + obj.at("port").as_string().c_str() + ", creating session...");
+            this->on_session_handler(
+                ip::tcp::endpoint(sender_ep.address(), stoi(obj.at("port").as_string().c_str())),
+                obj.at("id").as_string().c_str()
+            );
+        }
+
+
+    }
+    catch(const exception& e){
+        log_error(string("[ERROR] Failed to parse UDP message: ") + e.what());
+    };
+
+}
+
+void UdpManager::on_broadcast_handler(const boost::json::object& msg_obj, const ip::udp::endpoint& sender_ep) {
+
+    if(std::string_view(msg_obj.at("id").as_string()) > my_id){//此时对方哈希值比我方大，对方为发送方，我方需REPLY让对方创建连接
+        log_info(string("[INFO] Received BROADCAST with smaller ID from ") + msg_obj.at("id").as_string().c_str() + ":" + msg_obj.at("port").as_string().c_str() + ", sending REPLY...");
+        ip::udp::endpoint target_ep(sender_ep.address(), 12345);
+        this->broadcaster.send_reply(target_ep, make_reply_content());
+    }
+    else{//我方哈希值大于对方，我方创建连接
+        this->on_session_handler(
+                ip::tcp::endpoint(sender_ep.address(), stoi(msg_obj.at("port").as_string().c_str()))
+                , msg_obj.at("id").as_string().c_str());
+        
+    }
+
+
+};
+
+
+================================================================================
+FILE PATH: TODO.txt
+
+================================================================================
+设计Aegis Encrypted TCP Protocol(AETP协议)
+
+完成Encryptor类，实现加密解密逻辑
+
+根据状态机完成Session的handle_incoming_message成员函数
+
