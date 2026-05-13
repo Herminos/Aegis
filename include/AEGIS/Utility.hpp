@@ -6,7 +6,7 @@
 #include<string>
 #include<sodium.h>
 
-std::string bin_to_base64(const std::vector<uint8_t>& bin) {
+inline std::string bin_to_base64(const std::vector<uint8_t>& bin) {
 
     size_t b64_len = sodium_base64_encoded_len(bin.size(), sodium_base64_VARIANT_ORIGINAL);
     
@@ -21,7 +21,7 @@ std::string bin_to_base64(const std::vector<uint8_t>& bin) {
     return b64_str;
 }
 
-std::vector<uint8_t> base64_to_bin(const std::string& b64) {
+inline std::vector<uint8_t> base64_to_bin(const std::string& b64) {
     if (b64.empty()) {
         return {};
     }

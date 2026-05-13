@@ -99,7 +99,7 @@ std::vector<uint8_t> Encryptor::do_decrypt(const std::vector<uint8_t>& cipher_an
     return plaintext;
 }
 
-boost::asio::awaitable<std::vector<uint8_t>> Encryptor::async_encrypt(const std::vector<uint8_t> &data, const std::vector<uint8_t> &key, const std::vector<uint8_t> &nonce) {
+boost::asio::awaitable<std::vector<uint8_t>> Encryptor::async_encrypt(std::vector<uint8_t> data, std::vector<uint8_t> key, std::vector<uint8_t> nonce) {
     auto io_executor = co_await boost::asio::this_coro::executor;
     co_await boost::asio::post(_thread_pool, boost::asio::use_awaitable);
 
@@ -109,7 +109,7 @@ boost::asio::awaitable<std::vector<uint8_t>> Encryptor::async_encrypt(const std:
     co_return cipher_text;
 }
 
-boost::asio::awaitable<std::vector<uint8_t>> Encryptor::async_decrypt(const std::vector<uint8_t> &cipher_and_mac, const std::vector<uint8_t> &nonce, const std::vector<uint8_t> &key) {
+boost::asio::awaitable<std::vector<uint8_t>> Encryptor::async_decrypt(std::vector<uint8_t> cipher_and_mac, std::vector<uint8_t> nonce, std::vector<uint8_t> key) {
     auto io_executor = co_await boost::asio::this_coro::executor;
     co_await boost::asio::post(_thread_pool, boost::asio::use_awaitable);
 
@@ -160,7 +160,7 @@ SessionKeyPair Encryptor::derive_session_keys(
     return keys;
 }
 
-std::vector<uint8_t> generate_signature(const std::vector<uint8_t>& message, const std::vector<uint8_t>& private_key){
+std::vector<uint8_t> Encryptor::generate_signature(const std::vector<uint8_t>& message, const std::vector<uint8_t>& private_key){
 
     if (private_key.size() != crypto_sign_SECRETKEYBYTES) {
         throw std::invalid_argument("[Crypto] Invalid Ed25519 secret key size.");

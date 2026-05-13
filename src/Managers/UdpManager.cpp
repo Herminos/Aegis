@@ -4,7 +4,7 @@
 #include<stdio.h>
 #include<memory>
 #include<boost/asio.hpp>
-#include<boost/json/src.hpp>
+#include<boost/json.hpp>
 #include<vector>
 #include<string>
 
@@ -25,7 +25,7 @@ UdpBroadcaster::UdpBroadcaster(io_context &_io, int port)
 void UdpBroadcaster::broadcast(const string& msg) 
 {
     if (!if_still_broadcasting) {
-        printf("[INFO] Stopped broadcasting.\n");
+        //printf("[INFO] Stopped broadcasting.\n");
         socket.close();
         timer.cancel();
         return;
@@ -36,11 +36,11 @@ void UdpBroadcaster::broadcast(const string& msg)
     socket.async_send_to(buffer(*shared_msg), remote_endpoint, 
         [shared_msg, this](const boost::system::error_code& e, std::size_t bytes_transferred) {
             if (e) {
-                printf("[ERROR] Error broadcasting: %s\n", e.message().c_str());
+                //printf("[ERROR] Error broadcasting: %s\n", e.message().c_str());
                 return;
             } else {
-                printf("[INFO] Broadcasted %zu bytes\n", bytes_transferred);
-                printf("[INFO] Message: %s\n", shared_msg->c_str());
+                //printf("[INFO] Broadcasted %zu bytes\n", bytes_transferred);
+                //printf("[INFO] Message: %s\n", shared_msg->c_str());
                 
                 // 调用类成员 wait 继续定时任务
                 this->wait(e, shared_msg); 
@@ -65,7 +65,7 @@ void UdpBroadcaster::wait(const boost::system::error_code& e, std::shared_ptr<st
             if_still_broadcasting = false;
             return;
         }
-        printf("[INFO] Continuing broadcast...\n");
+        //printf("[INFO] Continuing broadcast...\n");
         this->broadcast(*shared_msg); // 继续广播同一消息
     });
 }
@@ -86,8 +86,8 @@ void UdpBroadcaster::send_reply(const ip::udp::endpoint& target_ep, const string
                 printf("[ERROR] Error broadcasting: %s\n", e.message().c_str());
                 return;
             }
-            printf("[INFO] Broadcasted %zu bytes\n", bytes_transferred);
-            printf("[INFO] Message: %s\n", shared_msg->c_str());
+            //printf("[INFO] Broadcasted %zu bytes\n", bytes_transferred);
+            //printf("[INFO] Message: %s\n", shared_msg->c_str());
         }
 
         
@@ -161,7 +161,7 @@ bool UdpManager::check_if_AUP(const boost::json::object& obj) {
     if (!ver || !ver->is_string() || ver->as_string() != CURRENT_VERSION) return false;
     if (!obj.contains("type") || !obj.contains("id") || !obj.contains("port")) return false;
     if (obj.at("id").as_string() == my_id) return false; 
-
+    printf("[INFO] Received valid AUP message from %s:%d\n", obj.at("id").as_string().c_str(), stoi(obj.at("port").as_string().c_str()));
     return true;
 }
 
@@ -183,12 +183,27 @@ void UdpManager::on_listened_handler(const std::vector<char>& msg, const ip::udp
     try{
         boost::json::value val=boost::json::parse(string_view(msg.data(), msg.size()));
         const boost::json::object obj=val.as_object();
-        if(!check_if_AUP(obj)) return;
+        if(!check_if_AUP(obj)){
+            //printf("[WARN] Received non-AUP or malformed message from %s:%d\n", sender_ep.address().to_string().c_str(), sender_ep.port());
+            return;
+        }
 
         if(obj.at("type")=="BROADCAST"){
+            printf("[INFO] Received BROADCAST from %s:%d\n", obj.at("id").as_string().c_str(), stoi(obj.at("port").as_string().c_str()));
+            if(obj.at("id").as_string() == my_id) {
+                printf("[INFO] Ignoring own BROADCAST message.\n");
+                return;
+            } //过滤掉自己发来的广播
+
+            if(obj.at("id").as_string() < my_id) {
+                printf("[INFO] Received BROADCAST with larger ID from %s:%d, waiting for REPLY\n", obj.at("id").as_string().c_str(), stoi(obj.at("port").as_string().c_str()));
+                return;
+            };//我方为接收方，等待对方回复创建连接
+            
             this->on_broadcast_handler(obj, sender_ep);
         }
         else if(obj.at("type")=="REPLY"){
+            printf("[INFO] Received REPLY from %s:%d\n", obj.at("id").as_string().c_str(), stoi(obj.at("port").as_string().c_str()));
             this->on_session_handler(
                 ip::tcp::endpoint(sender_ep.address(), stoi(obj.at("port").as_string().c_str()))
                 , obj.at("id").as_string().c_str(), obj.at("name").as_string().c_str());
@@ -205,7 +220,9 @@ void UdpManager::on_listened_handler(const std::vector<char>& msg, const ip::udp
 void UdpManager::on_broadcast_handler(const boost::json::object& msg_obj, const ip::udp::endpoint& sender_ep) {
 
     if(std::string_view(msg_obj.at("id").as_string()) > my_id){//此时对方哈希值比我方大，对方为发送方，我方需REPLY让对方创建连接
-        this->broadcaster.send_reply(sender_ep, make_reply_content());
+        printf("[INFO] Received BROADCAST with smaller ID from %s:%d, sending REPLY...\n", msg_obj.at("id").as_string().c_str(), stoi(msg_obj.at("port").as_string().c_str()));
+        ip::udp::endpoint target_ep(sender_ep.address(), 12345);
+        this->broadcaster.send_reply(target_ep, make_reply_content());
     }
     else{//我方哈希值大于对方，我方创建连接
         this->on_session_handler(

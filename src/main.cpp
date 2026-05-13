@@ -10,25 +10,7 @@
 
 using namespace boost::asio;
 
-/*
-int main() {
-    io_context io;
-    UdpBroadcaster broadcaster(io);
-    broadcaster.broadcast("Hello, network!");
-
-    UdpListener listener(io, [](const std::vector<char>& msg) {
-        printf("[RECEIVED] Received message: %s\n", std::string(msg.begin(), msg.end()).c_str());
-    });
-    listener.listen();
-
-    try{
-        io.run();
-    } catch (const std::exception& e) {
-        printf("[ERROR] Exception in io_context: %s\n", e.what());
-    }
-}*/
-
-int main(){
+int main(int argc, char* argv[]) {
 
     io_context io;
     thread_pool pool;
@@ -36,11 +18,24 @@ int main(){
     Encryptor encryptor(pool);
     SessionManager session_manager(io, encryptor);
     
-    UdpManager udp_manager(io, encryptor, my_name, "12345");
+    
 
-    const string my_hash="0x12345678";
-    //my_hash=encryptor.get_hash();
+    if(argc <= 1) {
+        printf("Usage: %s <available_tcp_port>\n", argv[0]);
+        return 1;
+    }
+    string available_tcp_port=argv[1];
+    my_name += "_"+available_tcp_port;
+    UdpManager udp_manager(io, encryptor, my_name, available_tcp_port);
 
+    TcpSender tcp_sender(io, stoi(available_tcp_port));
+
+    tcp_sender.set_accept_handler(
+        [&session_manager, &io](ip::tcp::socket peer_socket) {
+            session_manager.new_session_from_socket_and_start(move(peer_socket), "", "Unknown");
+        }
+    );
+    tcp_sender.accept();
 
     udp_manager.set_on_session_handler(
         [&session_manager, &io](const ip::tcp::endpoint& remote_endpoint, const string& hash, const string& name) {
@@ -52,7 +47,12 @@ int main(){
                 name
             );
         }
-
     );
-
+    try{
+        io.run();
+    } catch (const std::exception& e) {
+        printf("[ERROR] Exception in io_context: %s\n", e.what());
+    }
+    pool.join();
+    system("pause");
 }

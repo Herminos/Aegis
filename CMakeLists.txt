@@ -14,8 +14,8 @@ pkg_check_modules(SODIUM REQUIRED libsodium)
 # 寻找 Boost 库 (Asio 主要是 Header-only，所以找到头文件即可)
 #find_package(Boost REQUIRED)
 
-file(GLOB_RECURSE AEGIS_SRC "*.cpp")
-file(GLOB_RECURSE AEGIS_HDR "*.hpp")
+file(GLOB_RECURSE AEGIS_SRC "src/*.cpp")
+file(GLOB_RECURSE AEGIS_HDR "include/*.hpp")
 
 # ==========================================
 # 第二步：生成可执行文件 (你的 P2P 节点)
@@ -24,7 +24,7 @@ add_executable(AEGIS
     ${AEGIS_SRC}
     ${AEGIS_HDR}
                 )
-
+ 
 # ==========================================
 # 第三步：链接头文件与系统库 (极其关键)
 # ==========================================

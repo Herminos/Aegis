@@ -20,18 +20,21 @@ struct SessionKeyPair{
 class Encryptor {
     public:
         Encryptor(thread_pool &pool);
-        boost::asio::awaitable<std::vector<uint8_t>> async_encrypt(const std::vector<uint8_t> &data, const std::vector<uint8_t> &key, const std::vector<uint8_t> &nonce);
-        boost::asio::awaitable<std::vector<uint8_t>> async_decrypt(const std::vector<uint8_t> &cipher_and_mac, const std::vector<uint8_t> &nonce, const std::vector<uint8_t> &key);
+        boost::asio::awaitable<std::vector<uint8_t>> async_encrypt(std::vector<uint8_t> data, std::vector<uint8_t> key, std::vector<uint8_t> nonce);
+        boost::asio::awaitable<std::vector<uint8_t>> async_decrypt(std::vector<uint8_t> cipher_and_mac, std::vector<uint8_t> nonce, std::vector<uint8_t> key);
         std::vector<uint8_t> public_key;
         std::vector<uint8_t> private_key;
         bool verify_signature(const vector<uint8_t>& signature, const vector<uint8_t>& signed_msg, const vector<uint8_t>& peer_long_term_pk){
-                if(!crypto_sign_verify_detached(
+                if(crypto_sign_verify_detached(
                 signature.data(),
                 signed_msg.data(),
                 signed_msg.size(),
                 peer_long_term_pk.data()
-            )){
-                throw runtime_error("Invaild signature.");
+            )==0)
+            {
+                return true;
+            } else {
+                return false;
             }
         }//这么简单的函数就写在这里了
         std::vector<uint8_t> generate_signature(const std::vector<uint8_t>& message, const std::vector<uint8_t>& private_key);

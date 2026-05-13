@@ -105,8 +105,9 @@ Session::Session(io_context &_io, ip::tcp::socket socket, const string& name, co
 };
 
 void Session::start(){
+    auto self(shared_from_this());
     printf("[INFO] Starting session: %s\n", session_name.c_str());
-    socket.async_connect(remote_endpoint, [self=shared_from_this()](const boost::system::error_code& ec) {
+    socket.async_connect(remote_endpoint, [self](const boost::system::error_code& ec) {
         if (ec) {
             printf("[ERROR] Failed to connect to %s: %s\n", self->remote_endpoint.address().to_string().c_str(), ec.message().c_str());
             return;
@@ -115,7 +116,9 @@ void Session::start(){
         
         boost::asio::co_spawn(
             self->socket.get_executor(),
-            self->start_read_loop_coroutine(),
+            [self]() mutable -> boost::asio::awaitable<void> {
+                co_await self->start_read_loop_coroutine();
+            },
             boost::asio::detached
         );
 
@@ -130,14 +133,14 @@ boost::asio::awaitable<void> Session::start_read_loop_coroutine() {
             if(self->role == SessionRole::CLIENT && self->state == SessionState::IDLE){
                 self->my_ephemeral_keypair=self->encryptor.generate_ephemeral_keypair();
                 self->send_package(
-                    build_handshake_package(
+                    std::move(build_handshake_package(
                         build_handshake_payload(
                             encryptor.public_key,
                             encryptor.private_key,
                             my_ephemeral_keypair.public_key,
                             encryptor
                         )
-                    )
+                    ))
                 );
                 self->state=SessionState::PUBKEY_EXCHANGING;
             }
@@ -145,11 +148,25 @@ boost::asio::awaitable<void> Session::start_read_loop_coroutine() {
             std::array<uint8_t, 10> header_buffer;
             co_await boost::asio::async_read(socket, boost::asio::buffer(header_buffer), boost::asio::use_awaitable);
 
+            
+
             AETPHeader header=parse_header(header_buffer);
             
-            if(header.magic != 0xAE47 || header.version != 0x01){
-                throw std::runtime_error("Invalid AETP header.");
+            if(header.magic != 0xAE47 || header.version != 0x01 || header.crc != calculate_header_crc16(header_buffer.data(), 8)){
+                //throw std::runtime_error("Invalid AETP header.");
+                printf("[ERROR] Invalid AETP header received, ignoring this packet.\n"); 
+                if(header.magic != 0xAE47){
+                    throw std::runtime_error("Invalid magic number in header.");
+                }
+                if(header.version != 0x01){
+                    throw std::runtime_error("Unsupported AETP version.");
+                }
+                if(header.crc != calculate_header_crc16(header_buffer.data(), 8)){
+                    printf("[ERROR] Header CRC16 mismatch. Expected: %04X, Received: %04X\n", calculate_header_crc16(header_buffer.data(), 8), header.crc);
+                    throw std::runtime_error("Header CRC16 mismatch.");
+                }
             }
+
             if(header.payload_length >= 1*1024*1024*1024){
                 throw std::runtime_error("Payload over 1GB, too large");
             }
@@ -164,7 +181,7 @@ boost::asio::awaitable<void> Session::start_read_loop_coroutine() {
                 if(self->state == SessionState::ACTIVE){
                     throw std::runtime_error("Session already active, receive PUBKEY_EXCHANGING packet.");
                 }
-                self->handle_handshaking(payload_buffer);
+                self->handle_handshaking(std::move(payload_buffer));
             }
 
             if(header.type==0x02){
@@ -174,6 +191,7 @@ boost::asio::awaitable<void> Session::start_read_loop_coroutine() {
                 co_await self->process_encrypted_data_coroutine(payload_buffer);
             }
         }
+        
     }
     catch(const exception &e){
         printf("[WARN] Session terminated: %s\n", e.what());
@@ -181,7 +199,7 @@ boost::asio::awaitable<void> Session::start_read_loop_coroutine() {
     }
 };
 
-void Session::handle_handshaking(const std::vector<uint8_t>& handshaking_payload) {
+void Session::handle_handshaking(std::vector<uint8_t> handshaking_payload) {
 
     if(handshaking_payload.size() != 128){
         throw std::runtime_error("Invalid handshaking payload.");
@@ -189,8 +207,13 @@ void Session::handle_handshaking(const std::vector<uint8_t>& handshaking_payload
     vector<uint8_t> peer_long_term_pk(handshaking_payload.begin(), handshaking_payload.begin()+32);
     vector<uint8_t> peer_ephemeral_pk(handshaking_payload.begin()+32, handshaking_payload.begin()+64);
     vector<uint8_t> signature(handshaking_payload.begin()+64, handshaking_payload.end());
-    if(bin_to_base64(peer_long_term_pk)!=this->session_id){
+    string calculated_id = bin_to_base64(peer_long_term_pk);
+    if(calculated_id!=this->session_id && role == SessionRole::CLIENT){
         throw std::runtime_error("Incorrect session ID with UDP Broadcast phase");
+    }
+    if (this->role == SessionRole::SERVER) {
+        this->session_id = calculated_id;
+        printf("[INFO] Server learned Client's real ID: %s\n", this->session_id.c_str());
     }
     std::vector<uint8_t> signed_msg;
     std::string prefix = "AEGIS";
@@ -209,14 +232,14 @@ void Session::handle_handshaking(const std::vector<uint8_t>& handshaking_payload
         session_key_pair = encryptor.derive_session_keys(false, peer_ephemeral_pk, my_ephemeral_keypair.public_key, my_ephemeral_keypair.private_key);
     
         send_package(
-            build_handshake_package(
+            std::move(build_handshake_package(
                 build_handshake_payload(
                     encryptor.public_key,
                     encryptor.private_key,
                     my_ephemeral_keypair.public_key,
                     encryptor
                 )
-            )
+            ))
         );
         state = SessionState::ACTIVE;
         printf("[INFO] Server Session %s: Keys derived, ACTIVE.\n", session_id.c_str());
@@ -233,13 +256,18 @@ void Session::handle_handshaking(const std::vector<uint8_t>& handshaking_payload
 }
 }
 
-boost::asio::awaitable<void> Session::process_encrypted_data_coroutine(const std::vector<uint8_t>& payload) {
+boost::asio::awaitable<void> Session::process_encrypted_data_coroutine(std::vector<uint8_t> payload) {
     vector<uint8_t> nonce(parse_nonce_from_payload(payload));
     vector<uint8_t> cipher_and_mac(parse_cipher_and_mac_from_payload(payload));
-    vector<uint8_t> plain_text = co_await encryptor.async_decrypt(cipher_and_mac, nonce, session_key_pair.rx_key);
+    vector<uint8_t> plain_text = co_await encryptor.async_decrypt(move(cipher_and_mac), move(nonce), session_key_pair.rx_key);
     
     handle_incoming_message(string(plain_text.begin(), plain_text.end()));
 
+};
+
+void Session::handle_incoming_message(const string& msg) {
+    printf("[INFO] Session %s received message: %s\n", session_id.c_str(), msg.c_str());
+    // 这里可以添加更多的消息处理逻辑
 };
 
 void Session::close_session(const boost::system::error_code& ec) {
@@ -259,18 +287,18 @@ void Session::close_session(const boost::system::error_code& ec) {
            session_name.c_str(), session_id.c_str(), ec.message().c_str());
 }
 
-void Session::send_package(const vector<uint8_t>& package) {
+void Session::send_package(vector<uint8_t> package) {
     if(!socket.is_open()){
         return;
     }
     boost::asio::co_spawn(
         socket.get_executor(),
-        send_package_coroutine(package),
+        send_package_coroutine(std::move(package)),
         boost::asio::detached
     );
 }
 
-boost::asio::awaitable<void> Session::send_package_coroutine(const vector<uint8_t>& package) {
+boost::asio::awaitable<void> Session::send_package_coroutine(vector<uint8_t> package) {
 
     try{
         co_await boost::asio::async_write(socket, boost::asio::buffer(package), boost::asio::use_awaitable);
@@ -318,11 +346,23 @@ void SessionManager::new_session(const string& ip_addr, const string& port, cons
 }
 
 void SessionManager::new_session_from_socket_and_start(ip::tcp::socket socket, const string& session_id, const string& name) {
-    if(session_map.find(session_id) != session_map.end()) {
-        printf("[WARN] Session with id %s already exists. Skipping creation.\n", session_id.c_str());
+    
+    // 1. 生成安全的映射 ID
+    // 如果是 Server，传入的 id 是空的，我们必须给它一个临时 ID 防止 map 冲突
+    string map_key = session_id;
+    if (map_key.empty()) {
+        // 使用对象的内存地址作为临时唯一 ID，绝不会冲突
+        map_key = "TEMP_" + to_string(reinterpret_cast<uintptr_t>(&socket));
+    }
+
+    if(session_map.find(map_key) != session_map.end()) {
+        printf("[WARN] Session with id %s already exists. Skipping.\n", map_key.c_str());
         return;
     }
-    auto session=make_shared<Session>(io, move(socket), name, session_id, encryptor);
+
+    // 注意：把 map_key 传给 Session，这样它销毁时才能正确带走这个 key
+    auto session = make_shared<Session>(io, move(socket), name, map_key, encryptor);
+    session->role = SessionRole::SERVER;
     
     session->set_on_close_handler([this](const string& id) {
         boost::asio::post(io, [this, id](){
@@ -330,16 +370,26 @@ void SessionManager::new_session_from_socket_and_start(ip::tcp::socket socket, c
             if (erased > 0) {
                 printf("[INFO] Session with id %s removed from session manager.\n", id.c_str());
             } else {
-                printf("[WARN] Attempted to remove session with id %s, but it was not found in session manager.\n", id.c_str());
+                printf("[WARN] Attempted to remove session id %s, but not found.\n", id.c_str());
             }
-
         });
     });
-    session->role = SessionRole::SERVER;
-    session_map[session_id]=session;
+    
+    session_map[map_key] = session;
+
+    // 2. 加上异常护盾的协程启动器
     boost::asio::co_spawn(
         io,
-        session->start_read_loop_coroutine(),
+        [session]() mutable -> boost::asio::awaitable<void> {
+            try {
+                // 只要这里不抛出未捕获的异常，服务端就不会闪退
+                co_await session->start_read_loop_coroutine();
+            } 
+            catch (const std::exception& e) {
+                printf("[ERROR] Session connection violently broken: %s\n", e.what());
+                session->close_session(boost::asio::error::fault); 
+            }
+        },
         boost::asio::detached
     );
 }

@@ -3,6 +3,7 @@
 #include<stdio.h>
 #include<memory>
 #include<boost/asio.hpp>
+#include<boost/json.hpp>
 #include<vector>
 #include<AEGIS/Encryptor.hpp>
 
