@@ -11,9 +11,9 @@
 using namespace boost::asio;
 using namespace std;
 
-#define SENDING_PUBKEY 0x01
-#define SENDING_ENCRYPTED_DATA 0x02
-#define TERMINATED 0xFF
+#define __SENDING_PUBKEY 0x01
+#define __SENDING_ENCRYPTED_DATA 0x02
+#define __TERMINATED 0xFF
 
 inline AETPHeader parse_header(const array<uint8_t, 10> buffer){
     AETPHeader header;
@@ -92,14 +92,14 @@ std::vector<uint8_t> Session::build_package_from_payload(const std::vector<uint8
     return package;
 }
 
-Session::Session(io_context &_io, const string& ip_addr, string port, const string& id, Encryptor &encryptor) :
-    socket(_io), remote_endpoint(ip::make_address_v4(ip_addr), stoi(port)), session_id(id), encryptor(encryptor), state(SessionState::IDLE)
+Session::Session(io_context &_io, const string& ip_addr, string port, const string& id, Encryptor &encryptor, std::function<void(std::string)> on_session_cleaned_handler) :
+    socket(_io), remote_endpoint(ip::make_address_v4(ip_addr), stoi(port)), session_id(id), encryptor(encryptor), state(SessionState::IDLE), on_session_cleaned_handler(on_session_cleaned_handler)
 {
     socket.open(ip::tcp::v4());
 }
 
-Session::Session(io_context &_io, ip::tcp::socket socket, const string& id, Encryptor &encryptor) :
-    socket(move(socket)), remote_endpoint(this->socket.remote_endpoint()), session_id(id), encryptor(encryptor), state(SessionState::IDLE)
+Session::Session(io_context &_io, ip::tcp::socket socket, const string& id, Encryptor &encryptor, std::function<void(std::string)> on_session_cleaned_handler) :
+    socket(move(socket)), remote_endpoint(this->socket.remote_endpoint()), session_id(id), encryptor(encryptor), state(SessionState::IDLE), on_session_cleaned_handler(on_session_cleaned_handler)
 {
     
 };
@@ -112,7 +112,6 @@ Session::~Session(){
         socket.close(ec);
     }
 
-    // 2. 修复：防御性清零。只有当 vector 里真有数据时，才去碰它的内存！
     if (!peer_ephemeral_public_key.empty()) {
         sodium_memzero(peer_ephemeral_public_key.data(), peer_ephemeral_public_key.size());
     }
@@ -165,7 +164,7 @@ boost::asio::awaitable<void> Session::start_read_loop_coroutine() {
                             encryptor.private_key,
                             my_ephemeral_keypair.public_key,
                             encryptor
-                        ), SENDING_PUBKEY
+                        ), __SENDING_PUBKEY
                     ))
                 );
                 self->state=SessionState::PUBKEY_EXCHANGING;
@@ -197,7 +196,10 @@ boost::asio::awaitable<void> Session::start_read_loop_coroutine() {
                 throw std::runtime_error("Payload over 1GB, too large");
             }
             if(header.type==0xFF){
-                throw std::runtime_error("Session terminated called by remote peer.");
+                print_info(string("[INFO] Received termination notice from ") + session_id + " (" + remote_endpoint.address().to_string() + ":" + to_string(remote_endpoint.port()) + "). Closing session.");
+                self->state = SessionState::TERMINATED;
+                clean_session();
+                co_return;
             }
 
             std::vector<uint8_t> payload_buffer(header.payload_length);
@@ -261,7 +263,7 @@ void Session::handle_handshaking(std::vector<uint8_t> handshaking_payload) {
                     encryptor.private_key,
                     my_ephemeral_keypair.public_key,
                     encryptor
-                ), SENDING_PUBKEY)
+                ), __SENDING_PUBKEY)
             )
         );
         state = SessionState::ACTIVE;
@@ -293,6 +295,10 @@ void Session::handle_incoming_message(const string& msg) {
     // 这里可以添加更多的消息处理
 };
 
+void Session::send_termination_package() {
+    send_package(build_package_from_payload({}, __TERMINATED));
+}
+
 void Session::close_session(const boost::system::error_code& ec) {
     
     if (socket.is_open()) {
@@ -307,6 +313,29 @@ void Session::close_session(const boost::system::error_code& ec) {
     }
 
     log_warning(string("[WARN] Session ") + session_id + " (" + remote_endpoint.address().to_string() + ":" + to_string(remote_endpoint.port()) + ") disconnected. Reason: " + ec.message());
+
+}
+
+void Session::shutdown_session() {
+    send_termination_package();
+    clean_session();
+}
+
+void Session::clean_session() {
+    if(state != SessionState::TERMINATED){
+        return;
+    }
+    outgoing_package_queue.clear();
+    peer_ephemeral_public_key.clear();
+    session_key_pair.rx_key.clear();
+    session_key_pair.tx_key.clear();
+    my_ephemeral_keypair.public_key.clear();
+    my_ephemeral_keypair.private_key.clear();
+    boost::system::error_code ignored_ec;
+    if (socket.is_open()) {
+        socket.close(ignored_ec);
+    }
+    on_session_cleaned_handler(session_id);
 }
 
 void Session::send_package(vector<uint8_t> package) {
@@ -369,7 +398,7 @@ void Session::send_message(const string& msg){
                 payload.insert(payload.end(), nonce.begin(), nonce.end());
                 payload.insert(payload.end(), cipher_and_mac.begin(), cipher_and_mac.end());
 
-                self->send_package(self->build_package_from_payload(std::move(payload), SENDING_ENCRYPTED_DATA));
+                self->send_package(self->build_package_from_payload(std::move(payload), __SENDING_ENCRYPTED_DATA));
             }
             catch(const std::exception &e){
                 log_error(string("[ERROR] Failed to send message: ") + e.what());
@@ -387,12 +416,10 @@ inline ip::tcp::socket& Session::get_socket() {
 };
 
 SessionManager::SessionManager(io_context &_io, Encryptor &encryptor) : io(_io) , encryptor(encryptor) {
-    on_receive_input_handler = [this](string raw_input) {
+    on_send_message_handler = [this](string raw_input) {
         boost::asio::post(
             io,
             [this, raw_input=move(raw_input)](){
-                if(raw_input.empty()) return;
-                //这里以后可以写命令处理逻辑，如切换会话
                 if(current_session_id.empty()){
                     print_info("No active session. Please select a session to send messages.");
                     return;
@@ -421,7 +448,7 @@ void SessionManager::new_session(const string& ip_addr, const string& port) {
         return;
     }
 
-    auto session=make_shared<Session>(io, ip_addr, port, map_key, encryptor);
+    auto session=make_shared<Session>(io, ip_addr, port, map_key, encryptor, on_session_cleaned_handler);
     
     session->set_on_close_handler([this](const string& id) {
         boost::asio::post(io, [this, id](){
@@ -431,7 +458,7 @@ void SessionManager::new_session(const string& ip_addr, const string& port) {
             } else {
                 log_warning(string("[WARN] Attempted to remove session with id ") + id + ", but it was not found in session manager.");
             }
-
+            this->current_session_id = "";
         });
     });
 
@@ -452,7 +479,7 @@ void SessionManager::new_session_from_socket_and_start(ip::tcp::socket socket) {
         log_info(string("[INFO] Session with id ") + map_key + " already exists. Skipping.");
         return;
     }
-    auto session = make_shared<Session>(io, move(socket), map_key, encryptor);
+    auto session = make_shared<Session>(io, move(socket), map_key, encryptor, on_session_cleaned_handler);
     session->role = SessionRole::SERVER;
     
     session->set_on_close_handler([this](const string& id) {
@@ -463,6 +490,7 @@ void SessionManager::new_session_from_socket_and_start(ip::tcp::socket socket) {
             } else {
                 log_warning(string("[WARN] Attempted to remove session id ") + id + ", but not found.");
             }
+            this->current_session_id = "";
         });
     });
 

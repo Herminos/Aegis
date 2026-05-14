@@ -1,5 +1,1 @@
-设计Aegis Encrypted TCP Protocol(AETP协议)
-
-完成Encryptor类，实现加密解密逻辑
-
-根据状态机完成Session的handle_incoming_message成员函数
+优化TERMINATION包逻辑，在密文里加入校验使其抗DoS攻击

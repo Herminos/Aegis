@@ -41,3 +41,9 @@ target_link_libraries(AEGIS PRIVATE
     ws2_32    # Windows Socket 核心 API (必须有)
     mswsock   # Windows Socket 高级扩展
 )
+
+add_compile_options(
+    -DSODIUM_STATIC -lsodium
+    -lboost_system -lboost_thread
+    -static -static-libgcc -static-libstdc++ 
+)

@@ -6,10 +6,26 @@
 #include<AEGIS/TcpManager.hpp>
 #include<AEGIS/UdpManager.hpp>
 #include<AEGIS/InputManager.hpp>
-#include<boost/asio.hpp>
-#include<boost/json/src.hpp>
+#include<AEGIS/CommandRouter.hpp>
 
 using namespace boost::asio;
+
+const string banner=R"(
+    ___    ______ ______ ____ _____
+   /   |  / ____// ____//  _// ___/
+  / /| | / __/  / / __  / /  \__ \
+ / ___ |/ /___ / /_/ /_/ /  ___/ / 
+/_/  |_/_____/ \____//___/ /____/ 
+                                     
+)";
+
+void print_banner(const string& id) {
+    printf("%s\n", banner.c_str());
+    printf("AEGIS - A P2P and E2EE communication tool\n");
+    printf("Version: %s\n", CURRENT_VERSION);
+    printf("Node ID: %s\n", id.c_str());
+    printf("AEGIS initialized successfully. Waiting for connections...\n");
+}
 
 int main(int argc, char* argv[]) {
 
@@ -18,18 +34,20 @@ int main(int argc, char* argv[]) {
     Encryptor encryptor(pool);
     SessionManager session_manager(io, encryptor);
     
-    
+    string available_tcp_port;
 
     if(argc <= 1) {
         printf("Usage: %s <available_tcp_port>\n", argv[0]);
         return 1;
     }
-    string available_tcp_port=argv[1];
+    available_tcp_port=argv[1];
 
     UdpManager udp_manager(io, encryptor, available_tcp_port);
     TcpSender tcp_sender(io, stoi(available_tcp_port));
     InputManager input_manager;
+    CommandRouter command_router;
 
+    print_banner(encryptor.get_id());
     tcp_sender.set_accept_handler(
         [&session_manager, &io](ip::tcp::socket peer_socket) {
             session_manager.new_session_from_socket_and_start(move(peer_socket));
@@ -52,9 +70,15 @@ int main(int argc, char* argv[]) {
         }
     );
 
-    input_manager.set_message_sent_callback([session_manager](std::string data) {
-        session_manager.on_receive_input_handler(data);
+    input_manager.set_message_sent_callback([&command_router](const std::string& raw_input) {
+        command_router.handle_raw_input(raw_input);
     });
+
+    command_router.set_send_message_handler(session_manager.on_send_message_handler);
+    command_router.set_exit_aegis_handler(session_manager.exit_aegis_handler);
+    command_router.set_list_all_sessions_handler(session_manager.list_all_sessions_handler);
+    command_router.set_list_current_session_handler(session_manager.list_current_session_handler);
+    
 
     input_manager.start_input_loop();
     
@@ -63,6 +87,7 @@ int main(int argc, char* argv[]) {
     } catch (const std::exception& e) {
         log_error(string("[ERROR] Exception in main io_context: ") + e.what());
     }
+    
     pool.join();
     system("pause");
 }

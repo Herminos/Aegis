@@ -5,6 +5,9 @@
 #include<vector>
 #include<string>
 #include<sodium.h>
+#include<stdexcept>
+
+using namespace std;
 
 const std::string RESET   = "\033[0m";
 const std::string RED     = "\033[31m";
