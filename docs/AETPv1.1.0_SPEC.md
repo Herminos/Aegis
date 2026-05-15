@@ -1,10 +1,10 @@
 Network Working Group                                         H. Herminos
 
-Internet-Draft                                               May 12, 2026
+Internet-Draft                                               May 15, 2026
 
 Category: Standards Track
 
-# AETP: Aegis Encrypted Transport Protocol v1.0.0
+# AETP: Aegis Encrypted Transport Protocol v1.1.0
 *(Draft Specification)*
 
 ## Abstract
@@ -13,7 +13,7 @@ AETP is a secure application-layer transport protocol designed to run over TCP. 
 
 ## Status of This Memo
 
-This document defines the standard implementation for the AETP Alpha 1.0.0 release.
+This document defines the standard implementation for the AETP Alpha 1.1.0 release.
 
 ## 1. Introduction
 
@@ -144,9 +144,9 @@ Context String (`"AEGIS"`) concatenated with the 32-byte Ephemeral Public Key.
 Once in the `[ACTIVE]` state, all Type `0x02` payloads MUST be encrypted.
 The structure of the payload is:
 
-    [ 24 Bytes: Nonce (monotonically increasing) ]
-    [ N  Bytes: Ciphertext (Encrypted JSON)      ]
-    [ 16 Bytes: MAC (Poly1305 Authenticator)     ]
+    [ 24 Bytes: Nonce (monotonically increasing)        ]
+    [ N+1  Bytes: Ciphertext and a TAG for extension    ]
+    [ 16 Bytes: MAC (Poly1305 Authenticator)            ]
 
 *(Note: `libsodium`'s `crypto_aead_xchacha20poly1305_ietf_encrypt` appends the MAC automatically).*
 

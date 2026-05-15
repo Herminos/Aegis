@@ -62,10 +62,8 @@ inline std::vector<uint8_t> build_handshake_payload(
     return payload;
 }
 
-std::vector<uint8_t> Session::build_package_from_payload(const std::vector<uint8_t>& payload, uint8_t type) {
-    
-
-    std::array<uint8_t, 10> header;
+inline array<uint8_t, 10> build_header_from_payload(const vector<uint8_t>& payload, const uint8_t& type){
+    array<uint8_t, 10> header;
     header[0] = 0xAE; // Magic 1
     header[1] = 0x47; // Magic 2
     header[2] = 0x01; // Version
@@ -81,6 +79,33 @@ std::vector<uint8_t> Session::build_package_from_payload(const std::vector<uint8
     uint16_t crc = calculate_header_crc16(header.data(), 8);
     header[8] = (crc >> 8) & 0xFF;
     header[9] = crc        & 0xFF;
+
+    return header;
+}
+
+inline array<uint8_t, 10> build_header_from_payload_length(const uint32_t& payload_length, const uint8_t& type){
+    array<uint8_t, 10> header;
+    header[0] = 0xAE; // Magic 1
+    header[1] = 0x47; // Magic 2
+    header[2] = 0x01; // Version
+    header[3] = type; // Type
+
+    header[4] = (payload_length >> 24) & 0xFF;
+    header[5] = (payload_length >> 16) & 0xFF;
+    header[6] = (payload_length >> 8)  & 0xFF;
+    header[7] = payload_length & 0xFF;
+
+    uint16_t crc = calculate_header_crc16(header.data(), 8);
+    header[8] = (crc >> 8) & 0xFF;
+    header[9] = crc        & 0xFF;
+
+    return header;
+}
+
+std::vector<uint8_t> Session::build_package_from_payload(const std::vector<uint8_t>& payload, const uint8_t& type) {
+    
+
+    std::array<uint8_t, 10> header= build_header_from_payload(payload, type);
 
     std::vector<uint8_t> package;
     
@@ -195,12 +220,6 @@ boost::asio::awaitable<void> Session::start_read_loop_coroutine() {
             if(header.payload_length >= 1*1024*1024*1024){
                 throw std::runtime_error("Payload over 1GB, too large");
             }
-            if(header.type==0xFF){
-                print_info(string("[INFO] Received termination notice from ") + session_id + " (" + remote_endpoint.address().to_string() + ":" + to_string(remote_endpoint.port()) + "). Closing session.");
-                self->state = SessionState::TERMINATED;
-                clean_session();
-                co_return;
-            }
 
             std::vector<uint8_t> payload_buffer(header.payload_length);
             co_await boost::asio::async_read(socket, boost::asio::buffer(payload_buffer), boost::asio::transfer_exactly(header.payload_length), boost::asio::use_awaitable);
@@ -216,14 +235,28 @@ boost::asio::awaitable<void> Session::start_read_loop_coroutine() {
                 if(self->state == SessionState::PUBKEY_EXCHANGING || self->state == SessionState::IDLE){
                     throw std::runtime_error("Public key not exchaneged yet, receive ACTIVE packet.");
                 }
-                co_await self->process_encrypted_data_coroutine(payload_buffer);
+                co_await self->process_encrypted_data_coroutine(payload_buffer, header_buffer);
+                if(self->state == SessionState::TERMINATED){
+                    log_info(string("[INFO] Session ") + self->session_id + " has been terminated, exiting read loop.");
+                    break;
+                }
             }
         }
         
     }
-    catch(const exception &e){
-        log_warning(string("[WARN] Session ") + session_id + " (" + remote_endpoint.address().to_string() + ":" + to_string(remote_endpoint.port()) + ") encountered an error: " + e.what() + ". Closing session.");
-        close_session(boost::asio::error::connection_aborted);
+    catch (const boost::system::system_error& e) {
+        if (e.code() == boost::asio::error::eof || e.code() == boost::asio::error::connection_reset) {
+            log_info(string("[INFO] Session ") + session_id + " gracefully disconnected by peer (EOF).");
+            self->state = SessionState::TERMINATED;
+            self->clean_session();
+        } else {
+            log_warning(string("[WARN] Session ") + session_id + " error: " + e.what());
+            self->close_session(e.code());
+        }
+    }
+    catch(const std::exception &e){
+        log_warning(string("[WARN] Session ") + session_id + " logic error: " + e.what());
+        self->close_session(boost::asio::error::connection_aborted);
     }
 };
 
@@ -281,12 +314,35 @@ void Session::handle_handshaking(std::vector<uint8_t> handshaking_payload) {
     }
 }
 
-boost::asio::awaitable<void> Session::process_encrypted_data_coroutine(std::vector<uint8_t> payload) {
+boost::asio::awaitable<void> Session::process_encrypted_data_coroutine(std::vector<uint8_t> payload, std::array<uint8_t, 10> header) {
     vector<uint8_t> nonce(parse_nonce_from_payload(payload));
     vector<uint8_t> cipher_and_mac(parse_cipher_and_mac_from_payload(payload));
-    vector<uint8_t> plain_text = co_await encryptor.async_decrypt(move(cipher_and_mac), move(nonce), session_key_pair.rx_key);
-    
-    handle_incoming_message(string(plain_text.begin(), plain_text.end()));
+
+    uint64_t received_counter;
+    std::memcpy(&received_counter, nonce.data(), sizeof(received_counter));
+    if(received_counter <= rx_counter){
+        log_warning(string("[WARN] Replay attack detected in session ") + session_id + ": received counter " + to_string(received_counter) + " is not greater than current rx_counter " + to_string(rx_counter));
+        throw std::runtime_error("Replay attack detected: received counter " + to_string(received_counter) + " is not greater than current rx_counter " + to_string(rx_counter));
+        co_return;
+    }
+    vector<uint8_t> plain_text = co_await encryptor.async_decrypt(move(cipher_and_mac), move(nonce), session_key_pair.rx_key, header);
+    rx_counter = received_counter;
+
+    AETPPackageType type = static_cast<AETPPackageType>(plain_text[0]);
+    string plain_message(plain_text.begin() + 1, plain_text.end());
+
+    if(type == AETPPackageType::TERMINATION){
+        if(!plain_message.empty()){
+            print_info("[From " + session_id + " and terminated]: " + plain_message);
+        }
+        boost::system::error_code ec;
+        socket.shutdown(boost::asio::ip::tcp::socket::shutdown_receive, ec);
+        this->state = SessionState::TERMINATED;
+        clean_session();
+        co_return;
+    }
+
+    handle_incoming_message(plain_message);
 
 };
 
@@ -295,8 +351,9 @@ void Session::handle_incoming_message(const string& msg) {
     // 这里可以添加更多的消息处理
 };
 
-void Session::send_termination_package() {
-    send_package(build_package_from_payload({}, __TERMINATED));
+void Session::send_termination_package(string end_message) {
+
+    send_message_with_tag(end_message, AETPPackageType::TERMINATION);
 }
 
 void Session::close_session(const boost::system::error_code& ec) {
@@ -316,15 +373,20 @@ void Session::close_session(const boost::system::error_code& ec) {
 
 }
 
-void Session::shutdown_session() {
-    send_termination_package();
-    clean_session();
+void Session::shutdown_session(const std::string& end_message) {
+    if(state == SessionState::ACTIVE) {
+        this->state = SessionState::TERMINATING;
+        send_termination_package(end_message);
+    } else {
+        clean_session();
+    }
 }
 
 void Session::clean_session() {
     if(state != SessionState::TERMINATED){
         return;
     }
+    print_info(string("[INFO] Cleaning session ") + session_id + " resources.");
     outgoing_package_queue.clear();
     peer_ephemeral_public_key.clear();
     session_key_pair.rx_key.clear();
@@ -366,6 +428,13 @@ void Session::start_write_loop(){
                     co_await boost::asio::async_write(self->socket, boost::asio::buffer(package), boost::asio::use_awaitable);
                     self->outgoing_package_queue.pop_front();
                 }
+                if(self->state == SessionState::TERMINATING){
+                    boost::system::error_code ec;
+                    self->socket.shutdown(boost::asio::ip::tcp::socket::shutdown_send, ec);
+                    if(ec){
+                        log_error(string("[ERROR] Failed to shutdown socket after sending termination package: ") + ec.message());
+                    }
+                }
             }
             catch(const std::exception &e){
                 log_error(string("[ERROR] Failed to send package: ") + e.what());
@@ -375,24 +444,33 @@ void Session::start_write_loop(){
     );
 }
 
-void Session::send_message(const string& msg){
-    if(state != SessionState::ACTIVE){
-        print_info(string("[INFO] Session ") + session_id + " is not ACTIVE. Cannot send message.");
+void Session::send_message_with_tag(const string& msg, const AETPPackageType &type) {
+    // 注意：如果是 TERMINATING 状态，只允许发送 FINAL 包
+    if(state != SessionState::ACTIVE && !(state == SessionState::TERMINATING && type == AETPPackageType::TERMINATION)){
+        print_info(string("[INFO] Session is not ACTIVE. Cannot send message."));
         return;
     }
-    std::vector<uint8_t> plain_text(msg.begin(), msg.end());
-    std::vector<uint8_t> nonce(crypto_aead_xchacha20poly1305_ietf_NPUBBYTES);
-    randombytes_buf(nonce.data(), nonce.size());
-    if(!socket.is_open()){
-        print_info(string("[INFO] Socket is closed. Cannot send message."));
-        return;
-    }
+
+    std::vector<uint8_t> plain_text;
+    plain_text.reserve(1 + msg.size());
+    plain_text.push_back(static_cast<uint8_t>(type));
+    plain_text.insert(plain_text.end(), msg.begin(), msg.end());
+
+    std::vector<uint8_t> nonce(crypto_aead_xchacha20poly1305_ietf_NPUBBYTES, 0);
+    if(!socket.is_open()) return;
+
+    std::array<uint8_t, 10> header = build_header_from_payload_length(plain_text.size() + crypto_aead_xchacha20poly1305_ietf_ABYTES + nonce.size(), __SENDING_ENCRYPTED_DATA);
+
     auto self(shared_from_this());
     boost::asio::co_spawn(
         socket.get_executor(),
-        [self, plain_text=std::move(plain_text), nonce=std::move(nonce)]() mutable -> boost::asio::awaitable<void> {
-            try{
-                std::vector<uint8_t> cipher_and_mac = co_await self->encryptor.async_encrypt(std::move(plain_text), self->session_key_pair.tx_key, nonce);
+        [self, plain_text=std::move(plain_text), nonce=std::move(nonce), header=std::move(header)]() mutable -> boost::asio::awaitable<void> {
+            try {
+                self->tx_counter+=randombytes_random()%7+1;
+                std::memcpy(nonce.data(), &self->tx_counter, sizeof(self->tx_counter));
+                randombytes_buf(nonce.data() + 8, 16);
+                std::vector<uint8_t> cipher_and_mac = co_await self->encryptor.async_encrypt(std::move(plain_text), self->session_key_pair.tx_key, nonce, header);
+                
                 std::vector<uint8_t> payload;
                 payload.reserve(nonce.size() + cipher_and_mac.size());
                 payload.insert(payload.end(), nonce.begin(), nonce.end());
@@ -400,14 +478,17 @@ void Session::send_message(const string& msg){
 
                 self->send_package(self->build_package_from_payload(std::move(payload), __SENDING_ENCRYPTED_DATA));
             }
-            catch(const std::exception &e){
+            catch(const std::exception &e) {
                 log_error(string("[ERROR] Failed to send message: ") + e.what());
                 self->close_session(boost::asio::error::fault);
             }
             co_return;
-        },
-        boost::asio::detached
+        }, boost::asio::detached
     );
+}
+
+void Session::send_message(const string& msg){
+    send_message_with_tag(msg, AETPPackageType::MESSAGE);
 }
 
 
@@ -517,6 +598,15 @@ void SessionManager::new_session_from_socket_and_start(ip::tcp::socket socket) {
 }
 
 void SessionManager::promote_session(const string& tmp_id, const string& actual_id) {
+    if(is_tombstoned(actual_id)) {
+        log_info(string("[INFO] Attempted to promote session to actual id ") + actual_id + ", but it is tombstoned. Dropping session.");
+        auto it = session_map.find(tmp_id);
+        if (it != session_map.end()) {
+            it->second->close_session(boost::asio::error::connection_aborted);
+            session_map.erase(it);
+        }
+        return;
+    }
     if(session_map.find(actual_id) != session_map.end()) {
         log_warning(string("[WARN] Attempted to promote session to actual id ") + actual_id + ", but it already exists. Dropping old session.");
         session_map[actual_id]->close_session(boost::asio::error::connection_aborted);

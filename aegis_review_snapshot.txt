@@ -1,5 +1,5 @@
 AEGIS PROJECT SOURCE SNAPSHOT
-Generated at: C:/Users/hermi/Desktop/Aegis
+Generated at: C:\Users\hermi\Desktop\Aegis
 ================================================================================
 
 
@@ -51,8 +51,14 @@ target_link_libraries(AEGIS PRIVATE
     mswsock   # Windows Socket 高级扩展
 )
 
+add_compile_options(
+    -DSODIUM_STATIC -lsodium
+    -lboost_system -lboost_thread
+    -static -static-libgcc -static-libstdc++ 
+)
+
 ================================================================================
-FILE PATH: docs/AETP_SPEC.md
+FILE PATH: docs\AETP_SPEC.md
 
 ================================================================================
 Network Working Group                                         H. Herminos
@@ -178,6 +184,10 @@ Implementations MUST maintain the following transition logic:
        |
        |-- (Recv ENCRYPTED_DATA_TRANSMISSION) ----> (Decrypt & Dispatch)
        |-- (Auth Fail / MAC Error) --> [TERMINATED]
+       |
+      [TERMINATED]
+       |
+       |-- (Wipe Keys) ---> (Close Socket)
 
 ## 5. Handshake Procedure (SENDING_PUBKEY)
 
@@ -210,7 +220,193 @@ The structure of the payload is:
 * **Identity Verification**: The Long-Term Public Key received in the handshake SHOULD be verified against the peer's UDP discovery broadcast.
 
 ================================================================================
-FILE PATH: include/AEGIS/Encryptor.hpp
+FILE PATH: docs\AETPv1.1.0_SPEC.md
+
+================================================================================
+Network Working Group                                         H. Herminos
+
+Internet-Draft                                               May 15, 2026
+
+Category: Standards Track
+
+# AETP: Aegis Encrypted Transport Protocol v1.1.0
+*(Draft Specification)*
+
+## Abstract
+
+AETP is a secure application-layer transport protocol designed to run over TCP. Its primary objectives are to provide Aegis P2P nodes with resistance against Man-In-The-Middle (MITM) attacks, Perfect Forward Secrecy (PFS), and high-performance asynchronous data exchange. AETP utilizes a highly optimized 1-RTT cryptographic handshake.
+
+## Status of This Memo
+
+This document defines the standard implementation for the AETP Alpha 1.1.0 release.
+
+## 1. Introduction
+
+AETP segments the continuous TCP stream into discrete, deterministic frames using a strict binary header. All connection establishment procedures MUST adhere to a robust Finite State Machine (FSM) that binds long-term node identities to ephemeral session keys.
+
+## 2. Binary Framing
+
+Every AETP message MUST start with a fixed 10-byte header.
+
+```text
+
+    0                   1                   2                   3
+    0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1
+   +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+   |     Magic (0xAE 0x47)         |  Ver (0x01)   | Type (0xXX)   |
+   +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+   |                      Payload Length (N)                       |
+   +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+   |         CRC16 (Header)        |                               |
+   +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+                               |
+   |                                                               |
+   |                  Payload (N bytes)                            |
+   |                                                               |
+   +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+
+```
+
+**Fields:**
+* **Magic**: MUST be `0xAE 0x47` (Aegis Gate).
+* **Ver**: Protocol version. Current version is `0x01`.
+* **Type**:
+    * `0x01`: SENDING_PUBKEY (Handshake Packet)
+    * `0x02`: ENCRYPTED_DATA_TRANSMISSION (Application Data)
+    * `0xFF`: TERMINATED (Error / Socket Close)
+* **Length**: Payload byte count in Network Byte Order (Big-Endian).
+* **CRC16**: Checksum of the first 8 bytes (Header validation).
+
+## 3. Cryptographic Primitives
+
+AETP mandates the use of the `libsodium` library:
+* **Long-Term Identity & Signatures**: Ed25519
+* **Ephemeral Key Exchange**: Curve25519 (X25519)
+* **Authenticated Encryption**: XChaCha20-Poly1305-IETF
+
+## 4. Connection State Machine
+
+The Finite State Machine (FSM) for AETP is as follows:
+
+    enum class SessionState {
+       IDLE,
+       PUBKEY_EXCHANGING, // Client and Server exchange their long-term 
+                          // public key and ephemeral session public key, 
+                          // and a digital signature of ("AEGIS" + Ephemeral 
+                          // public key) using their own long-term private key.
+       ACTIVE,
+       TERMINATED
+    };
+
+Implementations MUST maintain the following transition logic:
+
+**[ Client Side (Initiator) ]**
+
+    [IDLE]
+       |
+       |-- (Generate Ephemeral Key pair)
+       |-- (Sign "AEGIS" + Ephemeral public key with long-term private key)
+       |-- (Send SENDING_PUBKEY) ----> [PUBKEY_EXCHANGING]
+       |
+    [PUBKEY_EXCHANGING]
+       |
+       |-- (Recv SENDING_PUBKEY)
+       |   |
+       |   |-- (Verify Peer's Signature)
+       |       |
+       |       |-- [Signature Valid] ----> (Compute Session Key) ----> [ACTIVE]
+       |       |-- [Signature Invalid] --> [TERMINATED]
+       |
+    [ACTIVE]
+       |
+       |-- (Recv ENCRYPTED_DATA_TRANSMISSION) ----> (Decrypt & Dispatch)
+       |-- (Auth Fail / MAC Error) -> [TERMINATED]
+       |
+    [TERMINATED]
+       |
+       |-- (Wipe Keys) ---> (Close Socket)
+
+**[ Server Side (Listener) ]**
+
+    [IDLE]
+       |
+       |-- (Accept Connection) ----> [PUBKEY_EXCHANGING]
+       |
+    [PUBKEY_EXCHANGING]
+       |
+       |-- (Recv SENDING_PUBKEY)
+       |-- (Verify Peer's Signature)
+       |   |-- [Signature Invalid] --> [TERMINATED]
+       |   |-- [Signature Valid] 
+       |       |-- (Generate Ephemeral Key Pair)
+       |       |-- (Compute Session Keys)
+       |       |-- (Sign "AEGIS" + Server's Ephemeral public key with Server's long-term private key)
+       |       |-- (Send SENDING_PUBKEY) ----> [ACTIVE]
+       |
+    [ACTIVE]
+       |
+       |-- (Recv ENCRYPTED_DATA_TRANSMISSION) ----> (Decrypt & Dispatch)
+       |-- (Auth Fail / MAC Error) --> [TERMINATED]
+       |
+      [TERMINATED]
+       |
+       |-- (Wipe Keys) ---> (Close Socket)
+
+## 5. Handshake Procedure (SENDING_PUBKEY)
+
+The payload for a Type `0x01` (`SENDING_PUBKEY`) message is exactly 128 bytes:
+
+    [ 32 Bytes: Long-Term Public Key (Ed25519) ]
+    [ 32 Bytes: Ephemeral Public Key (X25519)  ]
+    [ 64 Bytes: Detached Signature (Ed25519)   ]
+
+**Signature Generation:**
+The signature MUST be calculated over the following buffer:
+Context String (`"AEGIS"`) concatenated with the 32-byte Ephemeral Public Key.
+`crypto_sign_detached(sig, "AEGIS" || Ephemeral_PK, LongTerm_SK)`
+
+## 6. Application Payload (ENCRYPTED_DATA_TRANSMISSION)
+
+Once in the `[ACTIVE]` state, all Type `0x02` payloads MUST be encrypted.
+The structure of the payload is:
+
+    [ 24 Bytes: Nonce (monotonically increasing)        ]
+    [ N+1  Bytes: Ciphertext and a TAG for extension    ]
+    [ 16 Bytes: MAC (Poly1305 Authenticator)            ]
+
+*(Note: `libsodium`'s `crypto_aead_xchacha20poly1305_ietf_encrypt` appends the MAC automatically).*
+
+## 7. Security Considerations
+
+* **Perfect Forward Secrecy**: Implementations MUST call `sodium_memzero()` on the `ephemeral_sk`, `rx_key`, and `tx_key` immediately upon entering the `[TERMINATED]` state or object destruction.
+* **Buffer Overflow**: Implementations MUST verify the Header `Length` field against a maximum threshold (e.g., 16MB) before allocating receive buffers.
+* **Identity Verification**: The Long-Term Public Key received in the handshake SHOULD be verified against the peer's UDP discovery broadcast.
+
+================================================================================
+FILE PATH: include\AEGIS\CommandRouter.hpp
+
+================================================================================
+#pragma once
+
+#include<string>
+#include<functional>
+
+class CommandRouter{
+    public:
+        void handle_raw_input(const std::string& raw_msg);
+
+        void set_send_message_handler(std::function<void(const std::string& msg)> handler) { send_message = handler; }
+        void set_exit_aegis_handler(std::function<void()> handler) { exit_aegis_handler = handler; }
+        void set_list_all_sessions_handler(std::function<void()> handler) { list_all_sessions = handler; }
+        void set_list_current_session_handler(std::function<void()> handler) { list_current_session = handler; }
+    private:
+        std::function<void(const std::string& msg)> send_message;
+        std::function<void()> exit_aegis_handler;
+        std::function<void()> list_all_sessions;
+        std::function<void()> list_current_session;
+};
+
+================================================================================
+FILE PATH: include\AEGIS\Encryptor.hpp
 
 ================================================================================
 #pragma once
@@ -235,8 +431,8 @@ struct SessionKeyPair{
 class Encryptor {
     public:
         Encryptor(thread_pool &pool);
-        boost::asio::awaitable<std::vector<uint8_t>> async_encrypt(std::vector<uint8_t> data, std::vector<uint8_t> key, std::vector<uint8_t> nonce);
-        boost::asio::awaitable<std::vector<uint8_t>> async_decrypt(std::vector<uint8_t> cipher_and_mac, std::vector<uint8_t> nonce, std::vector<uint8_t> key);
+        boost::asio::awaitable<std::vector<uint8_t>> async_encrypt(std::vector<uint8_t> data, std::vector<uint8_t> key, std::vector<uint8_t> nonce, std::array<uint8_t, 10> header);
+        boost::asio::awaitable<std::vector<uint8_t>> async_decrypt(std::vector<uint8_t> cipher_and_mac, std::vector<uint8_t> nonce, std::vector<uint8_t> key, std::array<uint8_t, 10> header);
         std::vector<uint8_t> public_key;
         std::vector<uint8_t> private_key;
         bool verify_signature(const vector<uint8_t>& signature, const vector<uint8_t>& signed_msg, const vector<uint8_t>& peer_long_term_pk){
@@ -264,14 +460,14 @@ class Encryptor {
     private:
         void generate_identity_key_pair();
         void load_identity_key_pair();
-        std::vector<uint8_t> do_encrypt(const std::vector<uint8_t>& data, const std::vector<uint8_t>& public_key, const std::vector<uint8_t>& nonce);
-        std::vector<uint8_t> do_decrypt(const std::vector<uint8_t>& cipher_and_mac, const std::vector<uint8_t> nonce, const std::vector<uint8_t> key);
+        std::vector<uint8_t> do_encrypt(const std::vector<uint8_t>& data, const std::vector<uint8_t>& public_key, const std::vector<uint8_t>& nonce, const std::array<uint8_t, 10>& header);
+        std::vector<uint8_t> do_decrypt(const std::vector<uint8_t>& cipher_and_mac, const std::vector<uint8_t> nonce, const std::vector<uint8_t> key, const std::array<uint8_t, 10>& header);
         
         boost::asio::thread_pool &_thread_pool;
 };
 
 ================================================================================
-FILE PATH: include/AEGIS/InputManager.hpp
+FILE PATH: include\AEGIS\InputManager.hpp
 
 ================================================================================
 #pragma once
@@ -299,7 +495,7 @@ class InputManager{
 };
 
 ================================================================================
-FILE PATH: include/AEGIS/SessionManager.hpp
+FILE PATH: include\AEGIS\SessionManager.hpp
 
 ================================================================================
 #pragma once
@@ -310,6 +506,7 @@ FILE PATH: include/AEGIS/SessionManager.hpp
 #include<map>
 #include<deque>
 #include<functional>
+#include<set>
 #include<AEGIS/Encryptor.hpp>
 #include<AEGIS/Utility.hpp>
 
@@ -320,11 +517,18 @@ enum class SessionState{
     IDLE,
     PUBKEY_EXCHANGING,
     ACTIVE,
+    TERMINATING,
+    TERMINATED
 };
 
 enum class SessionRole{
     CLIENT,
     SERVER
+};
+
+enum AETPPackageType: uint8_t{
+    MESSAGE=0x01,
+    TERMINATION=0xFF
 };
 
 struct AETPHeader{
@@ -345,17 +549,23 @@ class Session:public enable_shared_from_this<Session>
         Encryptor &encryptor; //加密器实例，处理数据加密解密逻辑
 
         string session_id;
+        uint64_t tx_counter=0;
+        uint64_t rx_counter=0;
 
         EphemeralKeyPair my_ephemeral_keypair;
         vector<uint8_t> peer_ephemeral_public_key;
         SessionKeyPair session_key_pair;
-        std::vector<uint8_t> build_package_from_payload(const std::vector<uint8_t>& payload, uint8_t type);
+        std::vector<uint8_t> build_package_from_payload(const std::vector<uint8_t>& payload, const uint8_t &type);
         
-        boost::asio::awaitable<void> process_encrypted_data_coroutine(std::vector<uint8_t> data);
+        boost::asio::awaitable<void> process_encrypted_data_coroutine(std::vector<uint8_t> data, std::array<uint8_t, 10> header);
 
         std::function<void(std::string)> on_close_handler;
         std::function<void(std::string, std::string)> on_session_promotion_handler;
+        std::function<void(std::string)> on_session_cleaned_handler;
+
+        void send_message_with_tag(const string& msg, const AETPPackageType &type);
         
+        void send_termination_package(string end_message="");
         void send_package(vector<uint8_t> package);
         void start_write_loop();
 
@@ -365,17 +575,23 @@ class Session:public enable_shared_from_this<Session>
     public:        
         SessionRole role;
         void start(); //开始对话（仅限发起连接段）
-        Session(io_context &_io, const string& ip_addr, string port, const string& id, Encryptor &encryptor);
-        Session(io_context &_io, ip::tcp::socket socket, const string& id, Encryptor &encryptor);
+        Session(io_context &_io, const string& ip_addr, string port, const string& id, Encryptor &encryptor, std::function<void(std::string)> on_session_cleaned_handler);
+        Session(io_context &_io, ip::tcp::socket socket, const string& id, Encryptor &encryptor, std::function<void(std::string)> on_session_cleaned_handler);
         ~Session();
         ip::tcp::socket& get_socket();
         void set_on_close_handler(std::function<void(std::string)> handler) { on_close_handler = handler; }
         void set_on_session_promotion_handler(std::function<void(std::string, std::string)> handler) { on_session_promotion_handler = handler; }
+        void set_on_session_cleaned_handler(std::function<void(std::string)> handler) { on_session_cleaned_handler = handler; }
         boost::asio::awaitable<void> start_read_loop_coroutine();
         
         void close_session(const boost::system::error_code& ec);
+        void shutdown_session(const string &end_message);
 
         void send_message(const string& msg);
+        string get_session_addr_and_port() const {
+            return remote_endpoint.address().to_string() + ":" + to_string(remote_endpoint.port());
+        }
+        void clean_session();
         
 };
 
@@ -385,22 +601,69 @@ class SessionManager{
         string current_session_id;
         map<string, shared_ptr<Session>> session_map;
         io_context &io;
+        std::set<string> tombstoned_ids;
         
     public:
         SessionManager(io_context &_io, Encryptor &encryptor);
         void new_session(const string& ip_addr, const string& port);
         void new_session_from_socket_and_start(ip::tcp::socket socket);//从socket创建会话并直接发起会话
         inline io_context& get_io_context() { return io; }
-        std::function<void(std::string)> on_receive_input_handler;
-        void set_on_receive_handler(std::function<void(std::string)> handler) {
-            on_receive_input_handler = handler;
+        std::function<void(string)> on_send_message_handler;
+        bool is_tombstoned(const string& id) const {
+            return tombstoned_ids.find(id) != tombstoned_ids.end();
         }
         void promote_session(const string& tmp_id, const string& actual_id);
+        bool if_has_session(const string& id) const {
+            return session_map.find(id) != session_map.end();
+        }
+        std::function<void(string id)> on_session_cleaned_handler=[this](const string& id){
+            boost::asio::post(io, [this, id](){
+                size_t erased = session_map.erase(id);
+                if (erased > 0) {
+                    tombstoned_ids.insert(id);
+                    log_info(string("[INFO] Session with id ") + id + " cleaned and removed from session manager.");
+                } else {
+                    log_warning(string("[WARN] Attempted to clean session with id ") + id + ", but it was not found in session manager.");
+                }
+                this->current_session_id = "";
+            });
+        };
+        
+        std::function<void()> list_all_sessions_handler=[this](){
+            for(const auto& [id, session] : session_map) {
+                print_info(string("[INFO] Session ID: ") + id + ", Address: " + session->get_session_addr_and_port());
+            }
+        };
+
+        std::function<void()> list_current_session_handler=[this](){
+            if(current_session_id.empty()) {
+                print_info("[INFO] No current session.");
+                return;
+            }
+            if(session_map.find(current_session_id) != session_map.end()) {
+                auto session = session_map[current_session_id];
+                print_info(string("[INFO] Current Session ID: ") + current_session_id + ", Address: " + session->get_session_addr_and_port());
+            } else {
+                log_warning("[INFO] Current session ID is set but session not found in map.");
+            }
+         };
+
+        std::function<void(const std::string &end_message)> exit_aegis_handler=[this](const std::string &end_message) {
+            print_info("[INFO] Exiting AEGIS. Closing all sessions...");
+            for(const auto& [id, session] : session_map) {
+                session->shutdown_session(end_message);
+            }
+            std::thread([this](){
+                std::this_thread::sleep_for(std::chrono::seconds(1)); // 等待2秒让所有会话有机会发送结束消息
+                io.stop();
+            }).detach();
+        };
+
 };        
 
 
 ================================================================================
-FILE PATH: include/AEGIS/TcpManager.hpp
+FILE PATH: include\AEGIS\TcpManager.hpp
 
 ================================================================================
 #pragma once
@@ -434,7 +697,7 @@ class TcpSender{
 };
 
 ================================================================================
-FILE PATH: include/AEGIS/UdpManager.hpp
+FILE PATH: include\AEGIS\UdpManager.hpp
 
 ================================================================================
 #pragma once
@@ -457,6 +720,7 @@ class UdpBroadcaster{
         void broadcast(const string& msg);
         void wait(const boost::system::error_code& e, std::shared_ptr<string> shared_msg, short time=1);
         void send_reply(const ip::udp::endpoint& target_ep, const string& msg);
+        
         void stop_broadcasting();
         
     private:
@@ -495,10 +759,11 @@ class UdpManager{
     public:
         UdpManager(io_context& _io, Encryptor &encryptor, const string& available_tcp_port);
         void set_on_session_handler(function<void(const ip::tcp::endpoint&, const string&)> handler) { on_session_handler = handler; };
+        void stop();
 };
 
 ================================================================================
-FILE PATH: include/AEGIS/Utility.hpp
+FILE PATH: include\AEGIS\Utility.hpp
 
 ================================================================================
 #pragma once
@@ -508,6 +773,9 @@ FILE PATH: include/AEGIS/Utility.hpp
 #include<vector>
 #include<string>
 #include<sodium.h>
+#include<stdexcept>
+
+using namespace std;
 
 const std::string RESET   = "\033[0m";
 const std::string RED     = "\033[31m";
@@ -639,7 +907,7 @@ cmake --build .
 `
 
 ================================================================================
-FILE PATH: src/crypto/Encryptor.cpp
+FILE PATH: src\crypto\Encryptor.cpp
 
 ================================================================================
 #include<boost/asio.hpp>
@@ -695,7 +963,7 @@ EphemeralKeyPair Encryptor::generate_ephemeral_keypair() {
     return keypair;
 }
 
-std::vector<uint8_t> Encryptor::do_encrypt(const std::vector<uint8_t>& data, const std::vector<uint8_t>& key, const std::vector<uint8_t>& nonce) {
+std::vector<uint8_t> Encryptor::do_encrypt(const std::vector<uint8_t>& data, const std::vector<uint8_t>& key, const std::vector<uint8_t>& nonce, const std::array<uint8_t, 10>& header) {
     std::vector<uint8_t> cipher_text(data.size()+crypto_aead_xchacha20poly1305_ietf_ABYTES);
     unsigned long long len;
 
@@ -704,7 +972,8 @@ std::vector<uint8_t> Encryptor::do_encrypt(const std::vector<uint8_t>& data, con
         &len,
         data.data(),
         data.size(),
-        nullptr, 0,
+        header.data(),
+        header.size(),
         nullptr,
         nonce.data(),
         key.data()
@@ -716,7 +985,7 @@ std::vector<uint8_t> Encryptor::do_encrypt(const std::vector<uint8_t>& data, con
     return cipher_text;
 }
 
-std::vector<uint8_t> Encryptor::do_decrypt(const std::vector<uint8_t>& cipher_and_mac, const std::vector<uint8_t> nonce, const std::vector<uint8_t> key) {
+std::vector<uint8_t> Encryptor::do_decrypt(const std::vector<uint8_t>& cipher_and_mac, const std::vector<uint8_t> nonce, const std::vector<uint8_t> key, const std::array<uint8_t, 10>& header) {
 
     if (cipher_and_mac.size() < crypto_aead_xchacha20poly1305_ietf_ABYTES) {
         throw std::runtime_error("[Encryptor] Ciphertext too short to contain a valid MAC.");
@@ -731,8 +1000,8 @@ std::vector<uint8_t> Encryptor::do_decrypt(const std::vector<uint8_t>& cipher_an
         nullptr,                        // [OUT] 这里不用管
         cipher_and_mac.data(),          // [IN]  收到的密文（包含末尾的 MAC）
         cipher_and_mac.size(),          // [IN]  密文总长度
-        nullptr,                        // [IN]  附加认证数据 (AD) - 你的协议目前没用到，填 nullptr
-        0,                              // [IN]  附加认证数据的长度
+        header.data(),                        // [IN]  附加认证数据 (AD)
+        header.size(),                              // [IN]  附加认证数据的长度
         nonce.data(),                   // [IN]  24 字节的 Nonce
         key.data()                      // [IN]  32 字节的 Session Key
     );
@@ -745,21 +1014,21 @@ std::vector<uint8_t> Encryptor::do_decrypt(const std::vector<uint8_t>& cipher_an
     return plaintext;
 }
 
-boost::asio::awaitable<std::vector<uint8_t>> Encryptor::async_encrypt(std::vector<uint8_t> data, std::vector<uint8_t> key, std::vector<uint8_t> nonce) {
+boost::asio::awaitable<std::vector<uint8_t>> Encryptor::async_encrypt(std::vector<uint8_t> data, std::vector<uint8_t> key, std::vector<uint8_t> nonce, std::array<uint8_t, 10> header) {
     auto io_executor = co_await boost::asio::this_coro::executor;
     co_await boost::asio::post(_thread_pool, boost::asio::use_awaitable);
 
-    std::vector<uint8_t> cipher_text= do_encrypt(data, key, nonce);
+    std::vector<uint8_t> cipher_text= do_encrypt(data, key, nonce, header);
     
     co_await boost::asio::post(io_executor, boost::asio::use_awaitable);
     co_return cipher_text;
 }
 
-boost::asio::awaitable<std::vector<uint8_t>> Encryptor::async_decrypt(std::vector<uint8_t> cipher_and_mac, std::vector<uint8_t> nonce, std::vector<uint8_t> key) {
+boost::asio::awaitable<std::vector<uint8_t>> Encryptor::async_decrypt(std::vector<uint8_t> cipher_and_mac, std::vector<uint8_t> nonce, std::vector<uint8_t> key, std::array<uint8_t, 10> header) {
     auto io_executor = co_await boost::asio::this_coro::executor;
     co_await boost::asio::post(_thread_pool, boost::asio::use_awaitable);
 
-    std::vector<uint8_t> plain_text= do_decrypt(cipher_and_mac, nonce, key);
+    std::vector<uint8_t> plain_text= do_decrypt(cipher_and_mac, nonce, key, header);
     
     co_await boost::asio::post(io_executor, boost::asio::use_awaitable);
     co_return plain_text;
@@ -833,7 +1102,7 @@ std::vector<uint8_t> Encryptor::generate_signature(const std::vector<uint8_t>& m
 }
 
 ================================================================================
-FILE PATH: src/main.cpp
+FILE PATH: src\main.cpp
 
 ================================================================================
 #include<stdio.h>
@@ -844,10 +1113,26 @@ FILE PATH: src/main.cpp
 #include<AEGIS/TcpManager.hpp>
 #include<AEGIS/UdpManager.hpp>
 #include<AEGIS/InputManager.hpp>
-#include<boost/asio.hpp>
-#include<boost/json/src.hpp>
+#include<AEGIS/CommandRouter.hpp>
 
 using namespace boost::asio;
+
+const string banner=R"(
+    ___    ______ ______ ____ _____
+   /   |  / ____// ____//  _// ___/
+  / /| | / __/  / / __  / /  \__ \
+ / ___ |/ /___ / /_/ /_/ /  ___/ / 
+/_/  |_/_____/ \____//___/ /____/ 
+                                     
+)";
+
+void print_banner(const string& id) {
+    printf("%s\n", banner.c_str());
+    printf("AEGIS - A P2P and E2EE communication tool\n");
+    printf("Version: %s\n", CURRENT_VERSION);
+    printf("Node ID: %s\n", id.c_str());
+    printf("AEGIS initialized successfully. Waiting for connections...\n");
+}
 
 int main(int argc, char* argv[]) {
 
@@ -856,18 +1141,20 @@ int main(int argc, char* argv[]) {
     Encryptor encryptor(pool);
     SessionManager session_manager(io, encryptor);
     
-    
+    string available_tcp_port;
 
     if(argc <= 1) {
         printf("Usage: %s <available_tcp_port>\n", argv[0]);
         return 1;
     }
-    string available_tcp_port=argv[1];
+    available_tcp_port=argv[1];
 
     UdpManager udp_manager(io, encryptor, available_tcp_port);
     TcpSender tcp_sender(io, stoi(available_tcp_port));
     InputManager input_manager;
+    CommandRouter command_router;
 
+    print_banner(encryptor.get_id());
     tcp_sender.set_accept_handler(
         [&session_manager, &io](ip::tcp::socket peer_socket) {
             session_manager.new_session_from_socket_and_start(move(peer_socket));
@@ -877,6 +1164,15 @@ int main(int argc, char* argv[]) {
 
     udp_manager.set_on_session_handler(
         [&session_manager, &io](const ip::tcp::endpoint& remote_endpoint, const string& hash) {
+            if(session_manager.is_tombstoned(hash)) {
+                log_info(string("[INFO] Received session request with id ") + hash + " which is tombstoned. Ignoring.");
+                return;
+            }
+
+            if(session_manager.if_has_session(hash)) {
+                log_info(string("[INFO] Session with id ") + hash + " already exists. Skipping session creation.");
+                return;
+            }
             
             session_manager.new_session(
                 remote_endpoint.address().to_string(),
@@ -885,9 +1181,21 @@ int main(int argc, char* argv[]) {
         }
     );
 
-    input_manager.set_message_sent_callback([session_manager](std::string data) {
-        session_manager.on_receive_input_handler(data);
+    input_manager.set_message_sent_callback([&command_router](const std::string& raw_input) {
+        command_router.handle_raw_input(raw_input);
     });
+
+    command_router.set_send_message_handler(session_manager.on_send_message_handler);
+    command_router.set_exit_aegis_handler(
+        [&session_manager, &udp_manager](){
+            udp_manager.stop();
+            session_manager.exit_aegis_handler("Fuck you, I'm leaving.");
+        }
+
+    );
+    command_router.set_list_all_sessions_handler(session_manager.list_all_sessions_handler);
+    command_router.set_list_current_session_handler(session_manager.list_current_session_handler);
+    
 
     input_manager.start_input_loop();
     
@@ -896,12 +1204,13 @@ int main(int argc, char* argv[]) {
     } catch (const std::exception& e) {
         log_error(string("[ERROR] Exception in main io_context: ") + e.what());
     }
+    
     pool.join();
     system("pause");
 }
 
 ================================================================================
-FILE PATH: src/Managers/InputManager.cpp
+FILE PATH: src\Managers\InputManager.cpp
 
 ================================================================================
 #include<AEGIS/InputManager.hpp>
@@ -928,7 +1237,7 @@ void InputManager::input_loop() {
 }
 
 ================================================================================
-FILE PATH: src/Managers/SessionManager.cpp
+FILE PATH: src\Managers\SessionManager.cpp
 
 ================================================================================
 #include<boost/asio.hpp>
@@ -944,9 +1253,9 @@ FILE PATH: src/Managers/SessionManager.cpp
 using namespace boost::asio;
 using namespace std;
 
-#define SENDING_PUBKEY 0x01
-#define SENDING_ENCRYPTED_DATA 0x02
-#define TERMINATED 0xFF
+#define __SENDING_PUBKEY 0x01
+#define __SENDING_ENCRYPTED_DATA 0x02
+#define __TERMINATED 0xFF
 
 inline AETPHeader parse_header(const array<uint8_t, 10> buffer){
     AETPHeader header;
@@ -995,10 +1304,8 @@ inline std::vector<uint8_t> build_handshake_payload(
     return payload;
 }
 
-std::vector<uint8_t> Session::build_package_from_payload(const std::vector<uint8_t>& payload, uint8_t type) {
-    
-
-    std::array<uint8_t, 10> header;
+inline array<uint8_t, 10> build_header_from_payload(const vector<uint8_t>& payload, const uint8_t& type){
+    array<uint8_t, 10> header;
     header[0] = 0xAE; // Magic 1
     header[1] = 0x47; // Magic 2
     header[2] = 0x01; // Version
@@ -1015,6 +1322,33 @@ std::vector<uint8_t> Session::build_package_from_payload(const std::vector<uint8
     header[8] = (crc >> 8) & 0xFF;
     header[9] = crc        & 0xFF;
 
+    return header;
+}
+
+inline array<uint8_t, 10> build_header_from_payload_length(const uint32_t& payload_length, const uint8_t& type){
+    array<uint8_t, 10> header;
+    header[0] = 0xAE; // Magic 1
+    header[1] = 0x47; // Magic 2
+    header[2] = 0x01; // Version
+    header[3] = type; // Type
+
+    header[4] = (payload_length >> 24) & 0xFF;
+    header[5] = (payload_length >> 16) & 0xFF;
+    header[6] = (payload_length >> 8)  & 0xFF;
+    header[7] = payload_length & 0xFF;
+
+    uint16_t crc = calculate_header_crc16(header.data(), 8);
+    header[8] = (crc >> 8) & 0xFF;
+    header[9] = crc        & 0xFF;
+
+    return header;
+}
+
+std::vector<uint8_t> Session::build_package_from_payload(const std::vector<uint8_t>& payload, const uint8_t& type) {
+    
+
+    std::array<uint8_t, 10> header= build_header_from_payload(payload, type);
+
     std::vector<uint8_t> package;
     
     package.reserve(header.size() + payload.size());
@@ -1025,14 +1359,14 @@ std::vector<uint8_t> Session::build_package_from_payload(const std::vector<uint8
     return package;
 }
 
-Session::Session(io_context &_io, const string& ip_addr, string port, const string& id, Encryptor &encryptor) :
-    socket(_io), remote_endpoint(ip::make_address_v4(ip_addr), stoi(port)), session_id(id), encryptor(encryptor), state(SessionState::IDLE)
+Session::Session(io_context &_io, const string& ip_addr, string port, const string& id, Encryptor &encryptor, std::function<void(std::string)> on_session_cleaned_handler) :
+    socket(_io), remote_endpoint(ip::make_address_v4(ip_addr), stoi(port)), session_id(id), encryptor(encryptor), state(SessionState::IDLE), on_session_cleaned_handler(on_session_cleaned_handler)
 {
     socket.open(ip::tcp::v4());
 }
 
-Session::Session(io_context &_io, ip::tcp::socket socket, const string& id, Encryptor &encryptor) :
-    socket(move(socket)), remote_endpoint(this->socket.remote_endpoint()), session_id(id), encryptor(encryptor), state(SessionState::IDLE)
+Session::Session(io_context &_io, ip::tcp::socket socket, const string& id, Encryptor &encryptor, std::function<void(std::string)> on_session_cleaned_handler) :
+    socket(move(socket)), remote_endpoint(this->socket.remote_endpoint()), session_id(id), encryptor(encryptor), state(SessionState::IDLE), on_session_cleaned_handler(on_session_cleaned_handler)
 {
     
 };
@@ -1045,7 +1379,6 @@ Session::~Session(){
         socket.close(ec);
     }
 
-    // 2. 修复：防御性清零。只有当 vector 里真有数据时，才去碰它的内存！
     if (!peer_ephemeral_public_key.empty()) {
         sodium_memzero(peer_ephemeral_public_key.data(), peer_ephemeral_public_key.size());
     }
@@ -1098,7 +1431,7 @@ boost::asio::awaitable<void> Session::start_read_loop_coroutine() {
                             encryptor.private_key,
                             my_ephemeral_keypair.public_key,
                             encryptor
-                        ), SENDING_PUBKEY
+                        ), __SENDING_PUBKEY
                     ))
                 );
                 self->state=SessionState::PUBKEY_EXCHANGING;
@@ -1129,9 +1462,6 @@ boost::asio::awaitable<void> Session::start_read_loop_coroutine() {
             if(header.payload_length >= 1*1024*1024*1024){
                 throw std::runtime_error("Payload over 1GB, too large");
             }
-            if(header.type==0xFF){
-                throw std::runtime_error("Session terminated called by remote peer.");
-            }
 
             std::vector<uint8_t> payload_buffer(header.payload_length);
             co_await boost::asio::async_read(socket, boost::asio::buffer(payload_buffer), boost::asio::transfer_exactly(header.payload_length), boost::asio::use_awaitable);
@@ -1147,7 +1477,11 @@ boost::asio::awaitable<void> Session::start_read_loop_coroutine() {
                 if(self->state == SessionState::PUBKEY_EXCHANGING || self->state == SessionState::IDLE){
                     throw std::runtime_error("Public key not exchaneged yet, receive ACTIVE packet.");
                 }
-                co_await self->process_encrypted_data_coroutine(payload_buffer);
+                co_await self->process_encrypted_data_coroutine(payload_buffer, header_buffer);
+                if(self->state == SessionState::TERMINATED){
+                    log_info(string("[INFO] Session ") + self->session_id + " has been terminated, exiting read loop.");
+                    break;
+                }
             }
         }
         
@@ -1194,7 +1528,7 @@ void Session::handle_handshaking(std::vector<uint8_t> handshaking_payload) {
                     encryptor.private_key,
                     my_ephemeral_keypair.public_key,
                     encryptor
-                ), SENDING_PUBKEY)
+                ), __SENDING_PUBKEY)
             )
         );
         state = SessionState::ACTIVE;
@@ -1212,12 +1546,38 @@ void Session::handle_handshaking(std::vector<uint8_t> handshaking_payload) {
     }
 }
 
-boost::asio::awaitable<void> Session::process_encrypted_data_coroutine(std::vector<uint8_t> payload) {
+boost::asio::awaitable<void> Session::process_encrypted_data_coroutine(std::vector<uint8_t> payload, std::array<uint8_t, 10> header) {
     vector<uint8_t> nonce(parse_nonce_from_payload(payload));
     vector<uint8_t> cipher_and_mac(parse_cipher_and_mac_from_payload(payload));
-    vector<uint8_t> plain_text = co_await encryptor.async_decrypt(move(cipher_and_mac), move(nonce), session_key_pair.rx_key);
-    
-    handle_incoming_message(string(plain_text.begin(), plain_text.end()));
+
+    uint64_t received_counter;
+    std::memcpy(&received_counter, nonce.data(), sizeof(received_counter));
+    if(received_counter <= rx_counter){
+        log_warning(string("[WARN] Replay attack detected in session ") + session_id + ": received counter " + to_string(received_counter) + " is not greater than current rx_counter " + to_string(rx_counter));
+        throw std::runtime_error("Replay attack detected: received counter " + to_string(received_counter) + " is not greater than current rx_counter " + to_string(rx_counter));
+        co_return;
+    }
+    vector<uint8_t> plain_text = co_await encryptor.async_decrypt(move(cipher_and_mac), move(nonce), session_key_pair.rx_key, header);
+    rx_counter = received_counter;
+
+    if(plain_text.empty()){
+        log_warning(string("[WARN] Received empty plaintext in session ") + session_id + ", ignoring.");
+        co_return;
+    }
+
+    AETPPackageType type = static_cast<AETPPackageType>(plain_text[0]);
+    string plain_message(plain_text.begin() + 1, plain_text.end());
+
+    if(type == AETPPackageType::TERMINATION){
+        if(!plain_message.empty()){
+            print_info("[From " + session_id + " and terminated]: " + plain_message);
+        }
+        this->state = SessionState::TERMINATED;
+        clean_session();
+        co_return;
+    }
+
+    handle_incoming_message(plain_message);
 
 };
 
@@ -1225,6 +1585,34 @@ void Session::handle_incoming_message(const string& msg) {
     print_info(string("\r\n[From " + session_id + "]: ") + msg);
     // 这里可以添加更多的消息处理
 };
+
+void Session::send_termination_package(string end_message) {
+
+    vector<uint8_t> nonce(crypto_aead_xchacha20poly1305_ietf_NPUBBYTES, 0);
+    std::memcpy(nonce.data(), &tx_counter, sizeof(tx_counter));
+    randombytes_buf(nonce.data() + 8, 16);
+    std::vector<uint8_t> end_message_v(end_message.begin(), end_message.end());
+    
+    boost::asio::co_spawn(
+        socket.get_executor(),
+        [self=shared_from_this(), end_message=std::move(end_message_v), nonce=std::move(nonce)]() mutable -> boost::asio::awaitable<void> {
+            try{
+                std::vector<uint8_t> cipher_and_mac = co_await self->encryptor.async_encrypt(std::move(end_message), self->session_key_pair.tx_key, nonce, build_header_from_payload_length(end_message.size() + crypto_aead_xchacha20poly1305_ietf_ABYTES + nonce.size(), __SENDING_ENCRYPTED_DATA));
+                std::vector<uint8_t> payload;
+                payload.reserve(nonce.size() + cipher_and_mac.size());
+                payload.insert(payload.end(), nonce.begin(), nonce.end());
+                payload.insert(payload.end(), cipher_and_mac.begin(), cipher_and_mac.end());
+
+                self->send_package(self->build_package_from_payload(std::move(payload), __SENDING_ENCRYPTED_DATA));
+            }
+            catch(const std::exception &e){
+                log_error(string("[ERROR] Failed to send termination package: ") + e.what());
+            }
+            co_return;
+        },
+        boost::asio::detached
+    );
+}
 
 void Session::close_session(const boost::system::error_code& ec) {
     
@@ -1240,6 +1628,33 @@ void Session::close_session(const boost::system::error_code& ec) {
     }
 
     log_warning(string("[WARN] Session ") + session_id + " (" + remote_endpoint.address().to_string() + ":" + to_string(remote_endpoint.port()) + ") disconnected. Reason: " + ec.message());
+
+}
+
+void Session::shutdown_session(const std::string& end_message) {
+    if(state == SessionState::ACTIVE) {
+        this->state = SessionState::TERMINATING;
+        send_termination_package(end_message);
+    } else {
+        clean_session();
+    }
+}
+
+void Session::clean_session() {
+    if(state != SessionState::TERMINATED){
+        return;
+    }
+    outgoing_package_queue.clear();
+    peer_ephemeral_public_key.clear();
+    session_key_pair.rx_key.clear();
+    session_key_pair.tx_key.clear();
+    my_ephemeral_keypair.public_key.clear();
+    my_ephemeral_keypair.private_key.clear();
+    boost::system::error_code ignored_ec;
+    if (socket.is_open()) {
+        socket.close(ignored_ec);
+    }
+    on_session_cleaned_handler(session_id);
 }
 
 void Session::send_package(vector<uint8_t> package) {
@@ -1270,6 +1685,15 @@ void Session::start_write_loop(){
                     co_await boost::asio::async_write(self->socket, boost::asio::buffer(package), boost::asio::use_awaitable);
                     self->outgoing_package_queue.pop_front();
                 }
+                if(self->state == SessionState::TERMINATING){
+                    boost::system::error_code ec;
+                    self->socket.shutdown(boost::asio::ip::tcp::socket::shutdown_send, ec);
+                    if(ec){
+                        log_error(string("[ERROR] Failed to shutdown socket after sending termination package: ") + ec.message());
+                    }
+                    self->state = SessionState::TERMINATED;
+                    self->clean_session();
+                }
             }
             catch(const std::exception &e){
                 log_error(string("[ERROR] Failed to send package: ") + e.what());
@@ -1279,39 +1703,52 @@ void Session::start_write_loop(){
     );
 }
 
-void Session::send_message(const string& msg){
-    if(state != SessionState::ACTIVE){
-        print_info(string("[INFO] Session ") + session_id + " is not ACTIVE. Cannot send message.");
+void Session::send_message_with_tag(const string& msg, const AETPPackageType &type) {
+    // 注意：如果是 TERMINATING 状态，只允许发送 FINAL 包
+    if(state != SessionState::ACTIVE && !(state == SessionState::TERMINATED && type == AETPPackageType::TERMINATION)){
+        print_info(string("[INFO] Session is not ACTIVE. Cannot send message."));
         return;
     }
-    std::vector<uint8_t> plain_text(msg.begin(), msg.end());
-    std::vector<uint8_t> nonce(crypto_aead_xchacha20poly1305_ietf_NPUBBYTES);
-    randombytes_buf(nonce.data(), nonce.size());
-    if(!socket.is_open()){
-        print_info(string("[INFO] Socket is closed. Cannot send message."));
-        return;
-    }
+
+    std::vector<uint8_t> plain_text;
+    plain_text.reserve(1 + msg.size());
+    plain_text.push_back(static_cast<uint8_t>(type));
+    plain_text.insert(plain_text.end(), msg.begin(), msg.end());
+
+    std::vector<uint8_t> nonce(crypto_aead_xchacha20poly1305_ietf_NPUBBYTES, 0);
+    this->tx_counter++;
+    std::memcpy(nonce.data(), &this->tx_counter, sizeof(this->tx_counter));
+    randombytes_buf(nonce.data() + 8, 16);
+
+    if(!socket.is_open()) return;
+
+    std::array<uint8_t, 10> header = build_header_from_payload_length(plain_text.size() + crypto_aead_xchacha20poly1305_ietf_ABYTES + nonce.size(), __SENDING_ENCRYPTED_DATA);
+
     auto self(shared_from_this());
     boost::asio::co_spawn(
         socket.get_executor(),
-        [self, plain_text=std::move(plain_text), nonce=std::move(nonce)]() mutable -> boost::asio::awaitable<void> {
-            try{
-                std::vector<uint8_t> cipher_and_mac = co_await self->encryptor.async_encrypt(std::move(plain_text), self->session_key_pair.tx_key, nonce);
+        [self, plain_text=std::move(plain_text), nonce=std::move(nonce), header=std::move(header)]() mutable -> boost::asio::awaitable<void> {
+            try {
+                std::vector<uint8_t> cipher_and_mac = co_await self->encryptor.async_encrypt(std::move(plain_text), self->session_key_pair.tx_key, nonce, header);
+                
                 std::vector<uint8_t> payload;
                 payload.reserve(nonce.size() + cipher_and_mac.size());
                 payload.insert(payload.end(), nonce.begin(), nonce.end());
                 payload.insert(payload.end(), cipher_and_mac.begin(), cipher_and_mac.end());
 
-                self->send_package(self->build_package_from_payload(std::move(payload), SENDING_ENCRYPTED_DATA));
+                self->send_package(self->build_package_from_payload(std::move(payload), __SENDING_ENCRYPTED_DATA));
             }
-            catch(const std::exception &e){
+            catch(const std::exception &e) {
                 log_error(string("[ERROR] Failed to send message: ") + e.what());
                 self->close_session(boost::asio::error::fault);
             }
             co_return;
-        },
-        boost::asio::detached
+        }, boost::asio::detached
     );
+}
+
+void Session::send_message(const string& msg){
+    send_message_with_tag(msg, AETPPackageType::MESSAGE);
 }
 
 
@@ -1320,12 +1757,10 @@ inline ip::tcp::socket& Session::get_socket() {
 };
 
 SessionManager::SessionManager(io_context &_io, Encryptor &encryptor) : io(_io) , encryptor(encryptor) {
-    on_receive_input_handler = [this](string raw_input) {
+    on_send_message_handler = [this](string raw_input) {
         boost::asio::post(
             io,
             [this, raw_input=move(raw_input)](){
-                if(raw_input.empty()) return;
-                //这里以后可以写命令处理逻辑，如切换会话
                 if(current_session_id.empty()){
                     print_info("No active session. Please select a session to send messages.");
                     return;
@@ -1354,7 +1789,7 @@ void SessionManager::new_session(const string& ip_addr, const string& port) {
         return;
     }
 
-    auto session=make_shared<Session>(io, ip_addr, port, map_key, encryptor);
+    auto session=make_shared<Session>(io, ip_addr, port, map_key, encryptor, on_session_cleaned_handler);
     
     session->set_on_close_handler([this](const string& id) {
         boost::asio::post(io, [this, id](){
@@ -1364,7 +1799,7 @@ void SessionManager::new_session(const string& ip_addr, const string& port) {
             } else {
                 log_warning(string("[WARN] Attempted to remove session with id ") + id + ", but it was not found in session manager.");
             }
-
+            this->current_session_id = "";
         });
     });
 
@@ -1385,7 +1820,7 @@ void SessionManager::new_session_from_socket_and_start(ip::tcp::socket socket) {
         log_info(string("[INFO] Session with id ") + map_key + " already exists. Skipping.");
         return;
     }
-    auto session = make_shared<Session>(io, move(socket), map_key, encryptor);
+    auto session = make_shared<Session>(io, move(socket), map_key, encryptor, on_session_cleaned_handler);
     session->role = SessionRole::SERVER;
     
     session->set_on_close_handler([this](const string& id) {
@@ -1396,6 +1831,7 @@ void SessionManager::new_session_from_socket_and_start(ip::tcp::socket socket) {
             } else {
                 log_warning(string("[WARN] Attempted to remove session id ") + id + ", but not found.");
             }
+            this->current_session_id = "";
         });
     });
 
@@ -1422,6 +1858,15 @@ void SessionManager::new_session_from_socket_and_start(ip::tcp::socket socket) {
 }
 
 void SessionManager::promote_session(const string& tmp_id, const string& actual_id) {
+    if(is_tombstoned(actual_id)) {
+        log_info(string("[INFO] Attempted to promote session to actual id ") + actual_id + ", but it is tombstoned. Dropping session.");
+        auto it = session_map.find(tmp_id);
+        if (it != session_map.end()) {
+            it->second->close_session(boost::asio::error::connection_aborted);
+            session_map.erase(it);
+        }
+        return;
+    }
     if(session_map.find(actual_id) != session_map.end()) {
         log_warning(string("[WARN] Attempted to promote session to actual id ") + actual_id + ", but it already exists. Dropping old session.");
         session_map[actual_id]->close_session(boost::asio::error::connection_aborted);
@@ -1440,7 +1885,7 @@ void SessionManager::promote_session(const string& tmp_id, const string& actual_
 }
 
 ================================================================================
-FILE PATH: src/Managers/TcpManager.cpp
+FILE PATH: src\Managers\TcpManager.cpp
 
 ================================================================================
 #include<boost/asio.hpp>
@@ -1476,7 +1921,7 @@ void TcpSender::accept() {
 };
 
 ================================================================================
-FILE PATH: src/Managers/UdpManager.cpp
+FILE PATH: src\Managers\UdpManager.cpp
 
 ================================================================================
 #include<AEGIS/UdpManager.hpp>
@@ -1485,7 +1930,7 @@ FILE PATH: src/Managers/UdpManager.cpp
 #include<stdio.h>
 #include<memory>
 #include<boost/asio.hpp>
-#include<boost/json.hpp>
+#include<boost/json/src.hpp>
 #include<vector>
 #include<string>
 
@@ -1611,9 +2056,9 @@ string UdpManager::make_broadcast_content(){
     boost::json::object obj;
     obj["app"]="AUP";
     obj["ver"]=CURRENT_VERSION;
+    obj["port"]=my_tcp_port;
     obj["type"]="BROADCAST";
     obj["id"]=my_id;
-    obj["port"]=my_tcp_port;
     return boost::json::serialize(obj);
 };
 
@@ -1710,14 +2155,42 @@ void UdpManager::on_broadcast_handler(const boost::json::object& msg_obj, const 
 
 };
 
+void UdpManager::stop() {
+    log_info(string("[INFO] Stopping UDP Manager..."));
+    broadcaster.stop_broadcasting();
+}
+
+================================================================================
+FILE PATH: src\Router\CommandRouter.cpp
+
+================================================================================
+#include<AEGIS/CommandRouter.hpp>
+#include<AEGIS/Utility.hpp>
+
+using namespace std;
+
+void CommandRouter::handle_raw_input(const string& raw_msg) {
+    if(raw_msg.empty()) return;
+    if(raw_msg[0]=='/'){
+        if(raw_msg == "/list"){
+            if(list_all_sessions) list_all_sessions();
+            return;
+        }
+        if(raw_msg == "/current_session"){
+            if(list_current_session) list_current_session();
+            return;
+        }
+        if(raw_msg == "/exit"){
+            if(exit_aegis_handler) exit_aegis_handler();
+        }
+        print_info(string("[INFO] Unknown command: ") + raw_msg+". Run /help ");
+        return;
+    }
+    send_message(raw_msg);
+}
 
 ================================================================================
 FILE PATH: TODO.txt
 
 ================================================================================
-设计Aegis Encrypted TCP Protocol(AETP协议)
-
-完成Encryptor类，实现加密解密逻辑
-
-根据状态机完成Session的handle_incoming_message成员函数
-
+优化TERMINATION包逻辑，在密文里加入校验使其抗DoS攻击

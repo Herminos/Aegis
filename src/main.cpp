@@ -57,6 +57,10 @@ int main(int argc, char* argv[]) {
 
     udp_manager.set_on_session_handler(
         [&session_manager, &io](const ip::tcp::endpoint& remote_endpoint, const string& hash) {
+            if(session_manager.is_tombstoned(hash)) {
+                log_info(string("[INFO] Received session request with id ") + hash + " which is tombstoned. Ignoring.");
+                return;
+            }
 
             if(session_manager.if_has_session(hash)) {
                 log_info(string("[INFO] Session with id ") + hash + " already exists. Skipping session creation.");
@@ -75,7 +79,13 @@ int main(int argc, char* argv[]) {
     });
 
     command_router.set_send_message_handler(session_manager.on_send_message_handler);
-    command_router.set_exit_aegis_handler(session_manager.exit_aegis_handler);
+    command_router.set_exit_aegis_handler(
+        [&session_manager, &udp_manager](){
+            udp_manager.stop();
+            session_manager.exit_aegis_handler("Fuck you, I'm leaving.");
+        }
+
+    );
     command_router.set_list_all_sessions_handler(session_manager.list_all_sessions_handler);
     command_router.set_list_current_session_handler(session_manager.list_current_session_handler);
     

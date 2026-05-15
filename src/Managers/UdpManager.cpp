@@ -130,9 +130,9 @@ string UdpManager::make_broadcast_content(){
     boost::json::object obj;
     obj["app"]="AUP";
     obj["ver"]=CURRENT_VERSION;
+    obj["port"]=my_tcp_port;
     obj["type"]="BROADCAST";
     obj["id"]=my_id;
-    obj["port"]=my_tcp_port;
     return boost::json::serialize(obj);
 };
 
@@ -228,3 +228,8 @@ void UdpManager::on_broadcast_handler(const boost::json::object& msg_obj, const 
 
 
 };
+
+void UdpManager::stop() {
+    log_info(string("[INFO] Stopping UDP Manager..."));
+    broadcaster.stop_broadcasting();
+}

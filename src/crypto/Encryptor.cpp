@@ -51,7 +51,7 @@ EphemeralKeyPair Encryptor::generate_ephemeral_keypair() {
     return keypair;
 }
 
-std::vector<uint8_t> Encryptor::do_encrypt(const std::vector<uint8_t>& data, const std::vector<uint8_t>& key, const std::vector<uint8_t>& nonce) {
+std::vector<uint8_t> Encryptor::do_encrypt(const std::vector<uint8_t>& data, const std::vector<uint8_t>& key, const std::vector<uint8_t>& nonce, const std::array<uint8_t, 10>& header) {
     std::vector<uint8_t> cipher_text(data.size()+crypto_aead_xchacha20poly1305_ietf_ABYTES);
     unsigned long long len;
 
@@ -60,7 +60,8 @@ std::vector<uint8_t> Encryptor::do_encrypt(const std::vector<uint8_t>& data, con
         &len,
         data.data(),
         data.size(),
-        nullptr, 0,
+        header.data(),
+        header.size(),
         nullptr,
         nonce.data(),
         key.data()
@@ -72,7 +73,7 @@ std::vector<uint8_t> Encryptor::do_encrypt(const std::vector<uint8_t>& data, con
     return cipher_text;
 }
 
-std::vector<uint8_t> Encryptor::do_decrypt(const std::vector<uint8_t>& cipher_and_mac, const std::vector<uint8_t> nonce, const std::vector<uint8_t> key) {
+std::vector<uint8_t> Encryptor::do_decrypt(const std::vector<uint8_t>& cipher_and_mac, const std::vector<uint8_t> nonce, const std::vector<uint8_t> key, const std::array<uint8_t, 10>& header) {
 
     if (cipher_and_mac.size() < crypto_aead_xchacha20poly1305_ietf_ABYTES) {
         throw std::runtime_error("[Encryptor] Ciphertext too short to contain a valid MAC.");
@@ -87,8 +88,8 @@ std::vector<uint8_t> Encryptor::do_decrypt(const std::vector<uint8_t>& cipher_an
         nullptr,                        // [OUT] 这里不用管
         cipher_and_mac.data(),          // [IN]  收到的密文（包含末尾的 MAC）
         cipher_and_mac.size(),          // [IN]  密文总长度
-        nullptr,                        // [IN]  附加认证数据 (AD) - 你的协议目前没用到，填 nullptr
-        0,                              // [IN]  附加认证数据的长度
+        header.data(),                        // [IN]  附加认证数据 (AD)
+        header.size(),                              // [IN]  附加认证数据的长度
         nonce.data(),                   // [IN]  24 字节的 Nonce
         key.data()                      // [IN]  32 字节的 Session Key
     );
@@ -101,21 +102,21 @@ std::vector<uint8_t> Encryptor::do_decrypt(const std::vector<uint8_t>& cipher_an
     return plaintext;
 }
 
-boost::asio::awaitable<std::vector<uint8_t>> Encryptor::async_encrypt(std::vector<uint8_t> data, std::vector<uint8_t> key, std::vector<uint8_t> nonce) {
+boost::asio::awaitable<std::vector<uint8_t>> Encryptor::async_encrypt(std::vector<uint8_t> data, std::vector<uint8_t> key, std::vector<uint8_t> nonce, std::array<uint8_t, 10> header) {
     auto io_executor = co_await boost::asio::this_coro::executor;
     co_await boost::asio::post(_thread_pool, boost::asio::use_awaitable);
 
-    std::vector<uint8_t> cipher_text= do_encrypt(data, key, nonce);
+    std::vector<uint8_t> cipher_text= do_encrypt(data, key, nonce, header);
     
     co_await boost::asio::post(io_executor, boost::asio::use_awaitable);
     co_return cipher_text;
 }
 
-boost::asio::awaitable<std::vector<uint8_t>> Encryptor::async_decrypt(std::vector<uint8_t> cipher_and_mac, std::vector<uint8_t> nonce, std::vector<uint8_t> key) {
+boost::asio::awaitable<std::vector<uint8_t>> Encryptor::async_decrypt(std::vector<uint8_t> cipher_and_mac, std::vector<uint8_t> nonce, std::vector<uint8_t> key, std::array<uint8_t, 10> header) {
     auto io_executor = co_await boost::asio::this_coro::executor;
     co_await boost::asio::post(_thread_pool, boost::asio::use_awaitable);
 
-    std::vector<uint8_t> plain_text= do_decrypt(cipher_and_mac, nonce, key);
+    std::vector<uint8_t> plain_text= do_decrypt(cipher_and_mac, nonce, key, header);
     
     co_await boost::asio::post(io_executor, boost::asio::use_awaitable);
     co_return plain_text;

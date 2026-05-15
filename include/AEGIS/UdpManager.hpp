@@ -18,6 +18,7 @@ class UdpBroadcaster{
         void broadcast(const string& msg);
         void wait(const boost::system::error_code& e, std::shared_ptr<string> shared_msg, short time=1);
         void send_reply(const ip::udp::endpoint& target_ep, const string& msg);
+        
         void stop_broadcasting();
         
     private:
@@ -56,4 +57,5 @@ class UdpManager{
     public:
         UdpManager(io_context& _io, Encryptor &encryptor, const string& available_tcp_port);
         void set_on_session_handler(function<void(const ip::tcp::endpoint&, const string&)> handler) { on_session_handler = handler; };
+        void stop();
 };
