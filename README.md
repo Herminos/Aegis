@@ -4,13 +4,13 @@ AEGIS is a high-performanced, decentralized and encrypted network engine based o
 
 ## Core Features
 
-- **Modern Async Architecture**: Using C++20 Coroutine and Boost.Asio and implementing a high-performanced network engine.
+- **Modern Async Architecture**: Using C++20 Coroutine and Boost.Asio and implementing a high-performance network engine.
 
 - **Double Engine Scheduling**: Integrated thread pool allows AEGIS's encryption runs in parallel without blocking the IO thread.
 
 - **High-Performance**: Deeply applied Move Semantics to reduce memory copy and dangling pointer.
 
-- **Self-Certifying and Decentralized**: Peer ID is based on the hash value (BLAKE3) of public key to reduce the risk of identity theft from the root.
+- **Self-Certifying and Decentralized**: Peer ID is based on the long-term public key's base64 to reduce the risk of identity theft from the root.
 
 - **Highly-Secured**: Integrated libsodium uses XChaCha20-Poly1305 for encryption and Ed25519 for digital signature.
 
@@ -22,7 +22,7 @@ Environment requirements:
 - boost.asio,boost.json
 - libsodium
 
-`pwsh
+```pwsh
 
 git clone https://github.com/Herminos/Aegis.git
 
@@ -38,4 +38,4 @@ cmake --build .
 
 ./AEGIS
 
-`
+```
