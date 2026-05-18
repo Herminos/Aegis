@@ -28,7 +28,7 @@ void print_banner(const string& id) {
 }
 
 int main(int argc, char* argv[]) {
-
+    bool if_do_udp_broadcast=true;
     io_context io;
     thread_pool pool;
     Encryptor encryptor(pool);
@@ -42,7 +42,7 @@ int main(int argc, char* argv[]) {
     }
     available_tcp_port=argv[1];
 
-    UdpManager udp_manager(io, encryptor, available_tcp_port);
+    UdpManager udp_manager(io, encryptor, available_tcp_port, if_do_udp_broadcast);
     TcpSender tcp_sender(io, stoi(available_tcp_port));
     InputManager input_manager;
     CommandRouter command_router;
