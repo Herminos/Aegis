@@ -17,8 +17,10 @@ UdpBroadcaster::UdpBroadcaster(io_context &_io, int port)
     : socket(_io), timer(_io) 
 {
     socket.open(ip::udp::v4());
-    socket.set_option(socket_base::broadcast(true));
-    remote_endpoint = ip::udp::endpoint(ip::address_v4::broadcast(), port);
+    socket.set_option(ip::multicast::enable_loopback(true));
+    socket.set_option(ip::multicast::outbound_interface(ip::address_v4::loopback()));
+
+    remote_endpoint=ip::udp::endpoint(ip::make_address_v4("239.255.0.1"), port);
     //socket.bind(ip::udp::endpoint(ip::udp::v4(), port));
 }
 
@@ -75,18 +77,18 @@ void UdpBroadcaster::stop_broadcasting()
     if_still_broadcasting = false;
 }
 
-void UdpBroadcaster::send_reply(const ip::udp::endpoint& target_ep, const string& msg) {
+void UdpBroadcaster::send_reply(const string& msg) {
 
     auto shared_msg = make_shared<string>(msg);
 
     socket.async_send_to(
-        buffer(*shared_msg), target_ep,
-        [shared_msg, target_ep](const boost::system::error_code& e, std::size_t bytes_transferred) {
+        buffer(*shared_msg), remote_endpoint,
+        [shared_msg](const boost::system::error_code& e, std::size_t bytes_transferred) {
             if(e){
                 log_error(string("[ERROR] Error sending reply: ") + e.message());
                 return;
             }
-            log_info(string("[INFO] Reply sent %zu bytes to %s:%d") + to_string(bytes_transferred) + target_ep.address().to_string() + to_string(target_ep.port()));
+            log_info(string("[INFO] Reply sent %zu bytes to %s:%d") + to_string(bytes_transferred));
         }
 
         
@@ -100,7 +102,15 @@ UdpListener::UdpListener(io_context &io, function<void(const std::vector<char>&,
 {
     socket.open(ip::udp::v4());
     socket.set_option(socket_base::reuse_address(true));
+    #if defined(__APPLE__) || defined(__linux__)
+        typedef boost::asio::detail::socket_option::integer<SOL_SOCKET, SO_REUSEPORT> reuse_port;
+        socket.set_option(reuse_port(1));
+    #endif
     socket.bind(ip::udp::endpoint(ip::udp::v4(), port));
+    socket.set_option(ip::multicast::join_group(
+        ip::make_address_v4("239.255.0.1"),
+        ip::address_v4::loopback()
+    ));
     recv_buffer.resize(1024);
     
 }
@@ -136,13 +146,14 @@ string UdpManager::make_broadcast_content(){
     return boost::json::serialize(obj);
 };
 
-UdpManager::UdpManager(io_context& _io, Encryptor &encryptor, const string& available_tcp_port)
+UdpManager::UdpManager(io_context& _io, Encryptor &encryptor, const string& available_tcp_port, const bool& if_do_udp_broadcast)
   :  broadcaster(_io, 12345), listener(_io,
     [this](const std::vector<char>& msg, const ip::udp::endpoint& sender) {
         this->on_listened_handler(msg, sender);
     }
     ,12345), my_id(encryptor.get_id()), my_tcp_port(available_tcp_port)
 {
+    if(!if_do_udp_broadcast) return;//如果不做UDP广播的话构造函数立刻返回
     broadcaster.broadcast(make_broadcast_content());
     listener.listen();
 
@@ -216,8 +227,7 @@ void UdpManager::on_broadcast_handler(const boost::json::object& msg_obj, const 
 
     if(std::string_view(msg_obj.at("id").as_string()) > my_id){//此时对方哈希值比我方大，对方为发送方，我方需REPLY让对方创建连接
         log_info(string("[INFO] Received BROADCAST with smaller ID from ") + msg_obj.at("id").as_string().c_str() + ":" + msg_obj.at("port").as_string().c_str() + ", sending REPLY...");
-        ip::udp::endpoint target_ep(sender_ep.address(), 12345);
-        this->broadcaster.send_reply(target_ep, make_reply_content());
+        this->broadcaster.send_reply(make_reply_content());
     }
     else{//我方哈希值大于对方，我方创建连接
         this->on_session_handler(

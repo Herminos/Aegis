@@ -38,9 +38,15 @@ target_include_directories(AEGIS PRIVATE
 # 针对 Windows 环境的特殊处理：链接底层网卡驱动库
 target_link_libraries(AEGIS PRIVATE 
     ${SODIUM_LIBRARIES}
-    ws2_32    # Windows Socket 核心 API (必须有)
-    mswsock   # Windows Socket 高级扩展
+
 )
+
+if(WIN32)
+    target_link_libraries(AEGIS PRIVATE
+    ws2_32
+    mswsock
+    )
+endif()
 
 add_compile_options(
     -DSODIUM_STATIC -lsodium
