@@ -17,6 +17,6 @@ void InputManager::input_loop() {
     while(std::getline(std::cin, line)){
         
         if(line.empty()) continue;
-        message_sent_callback(move(line));
+        message_sent_callback(std::move(line));
     }
 }

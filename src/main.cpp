@@ -1,12 +1,13 @@
 #include<stdio.h>
 #include<functional>
-#include<thread>
+#include<string>
 #include<AEGIS/Encryptor.hpp>
 #include<AEGIS/SessionManager.hpp>
 #include<AEGIS/TcpManager.hpp>
 #include<AEGIS/UdpManager.hpp>
 #include<AEGIS/InputManager.hpp>
 #include<AEGIS/CommandRouter.hpp>
+#include<AEGIS/ArgParser.hpp>
 
 using namespace boost::asio;
 
@@ -28,33 +29,48 @@ void print_banner(const string& id) {
 }
 
 int main(int argc, char* argv[]) {
-    bool if_do_udp_broadcast=true;
+
+    AegisConfig config=ArgParser::parse(argc, argv);
+    if(config.is_vaild==false) {
+        return 1;
+    }
+    
     io_context io;
     thread_pool pool;
     Encryptor encryptor(pool);
     SessionManager session_manager(io, encryptor);
+    bool if_do_udp_broadcast=(config.listen_host=="0.0.0.0");
     
-    string available_tcp_port;
+    TcpSender tcp_sender(io, config.listen_port, config.listen_host);
 
-    if(argc <= 1) {
-        printf("Usage: %s <available_tcp_port>\n", argv[0]);
-        return 1;
-    }
-    available_tcp_port=argv[1];
-
+    unsigned short actual_port = tcp_sender.get_listen_port();
+    string available_tcp_port = to_string(actual_port);
     UdpManager udp_manager(io, encryptor, available_tcp_port, if_do_udp_broadcast);
-    TcpSender tcp_sender(io, stoi(available_tcp_port));
+    
+    
     InputManager input_manager;
     CommandRouter command_router;
 
     print_banner(encryptor.get_id());
     tcp_sender.set_accept_handler(
         [&session_manager, &io](ip::tcp::socket peer_socket) {
-            session_manager.new_session_from_socket_and_start(move(peer_socket));
+            session_manager.new_session_from_socket_and_start(std::move(peer_socket));
         }
     );
-    tcp_sender.accept();
-
+    if(config.is_client==true){
+        print_info("Client Mode, UDP Broadcast is disabled.");
+        print_info("Establishing connection with server...");
+        session_manager.new_session(config.connect_host, to_string(config.connect_port));
+    }
+    else if(config.listen_host=="127.0.0.1"){
+        print_info("Ghost Tunnel Mode, UDP Broadcast is disabled.");
+        print_info("Make sure you have enabled SSH Reversing on your router.");
+    }else{
+        print_info("LAN Mode, UDP Broadcast is enabled.");
+    }
+    if(config.is_client == false)
+        tcp_sender.accept();
+    
     udp_manager.set_on_session_handler(
         [&session_manager, &io](const ip::tcp::endpoint& remote_endpoint, const string& hash) {
             if(session_manager.is_tombstoned(hash)) {

@@ -1,9 +1,7 @@
 #pragma once
 
 #include<boost/asio.hpp>
-#include<stdio.h>
 #include<vector>
-#include<memory>
 #include<functional>
 
 
@@ -22,8 +20,10 @@ class TcpSender{
 
         AcceptHandler accept_handler;
     public:
-        TcpSender(io_context &_io, short port);
+        TcpSender(io_context &_io, short port=0, const string& host="0.0.0.0");
         void accept();
+        void set_peer_socket(ip::tcp::socket peer_socket);
 
         void set_accept_handler(AcceptHandler handler) { accept_handler = handler; }
+        unsigned short get_listen_port() { return acceptor.local_endpoint().port(); }
 };

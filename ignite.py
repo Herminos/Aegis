@@ -8,8 +8,8 @@ from pathlib import Path
 EXE_NAME = "AEGIS.exe"
 BUILD_DIR = Path("./build")
 RUN_DIR = Path("./run")
-PORT_A = "8080"
-PORT_B = "8081"
+PORT_A = " --lan 8080"
+PORT_B = " --lan 8081"
 
 def setup_environment():
     # 1. 检查 build 目录下是否有编译好的可执行文件

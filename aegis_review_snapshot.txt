@@ -47,9 +47,15 @@ target_include_directories(AEGIS PRIVATE
 # 针对 Windows 环境的特殊处理：链接底层网卡驱动库
 target_link_libraries(AEGIS PRIVATE 
     ${SODIUM_LIBRARIES}
-    ws2_32    # Windows Socket 核心 API (必须有)
-    mswsock   # Windows Socket 高级扩展
+
 )
+
+if(WIN32)
+    target_link_libraries(AEGIS PRIVATE
+    ws2_32
+    mswsock
+    )
+endif()
 
 add_compile_options(
     -DSODIUM_STATIC -lsodium
@@ -382,6 +388,154 @@ The structure of the payload is:
 * **Identity Verification**: The Long-Term Public Key received in the handshake SHOULD be verified against the peer's UDP discovery broadcast.
 
 ================================================================================
+FILE PATH: docs\AETPv2.0.0_SPEC.md
+
+================================================================================
+Network Working Group                                          H. Herminos
+Internet-Draft                                                May 17, 2026
+Category: Standards Track
+
+# AETP: Aegis Encrypted Transport Protocol Alpha 2.0.0
+*(Draft Specification)*
+
+## Abstract
+
+AETP (Aegis Encrypted Transport Protocol) is a secure, application-layer transport protocol designed to run over TCP or TLS streams. Its primary objectives are to provide Aegis P2P nodes with absolute resistance against Deep Packet Inspection (DPI), Perfect Forward Secrecy (PFS), and high-performance asynchronous data exchange. 
+
+AETP Alpha 2.0.0 fundamentally deprecates the explicit state machines and plaintext headers of Alpha 1.1.0. It introduces the **Rule of Absolute Entropy**: all bytes transmitted over the wire MUST be statistically indistinguishable from uniform random noise. To achieve this, AETP utilizes Elligator 2 obfuscation, an implicit incrementing counter mechanism, dual-block AEAD framing, and zero-byte protocol fingerprinting.
+
+## Status of This Memo
+
+This document defines the standard implementation for the AETP Alpha 2.0.0 release.
+
+## 1. Introduction
+
+Traditional transport protocols expose metadata (versions, flags, lengths, state types) in plaintext, rendering them vulnerable to heuristic and signature-based blocking by censorship firewalls. AETP Alpha 2.0.0 operates under the assumption that the network is highly hostile. 
+
+AETP segments continuous data into deterministic, fully encrypted chunks without any explicit protocol identification. Connection lifecycles are dictated by C++20 coroutine linear execution flow (Program Counter) rather than explicit Finite State Machine (FSM) variables.
+
+## 2. Deprecation of v1.1.0 Features
+
+Implementations upgrading to AETP Alpha 2.0.0 **MUST NOT** include the following legacy features:
+* **DEPRECATED:** Plaintext Magic Words or Protocol Identifiers.
+* **DEPRECATED:** Plaintext message types (e.g., `0x01` for Handshake, `0x02` for Data).
+* **DEPRECATED:** Explicit Nonce transmission over the wire.
+* **DEPRECATED:** CRC16 or any non-cryptographic checksums.
+
+## 3. Cryptographic Primitives
+
+AETP mandates the use of the `libsodium` library to guarantee constant-time, side-channel resistant operations:
+* **Long-Term Identity & Signatures**: Ed25519
+* **Ephemeral Key Exchange**: Ristretto255 (chosen for its zero-distortion blind spot group, ensuring public keys resemble uniform random bytes).
+* **Authenticated Encryption**: XChaCha20-Poly1305-IETF
+* **Curve Point Obfuscation**: Elligator 2 Mapping
+
+## 4. The 128-Byte Blind Handshake (Elligator 2 Obfuscation)
+
+Once the TCP connection is established, both endpoints MUST begin the **Blind Handshake** phase.
+
+The handshake phase consists of a strict 1-RTT exchange. Neither endpoint SHALL prepend any type identifier. The payload is exactly 128 bytes. 
+
+To enforce the **Rule of Absolute Entropy**, standard Ed25519 public keys and signature points MUST NOT be transmitted in the clear, as their algebraic validity (e.g., verifying if a point lies on the Curve25519 equation) presents a highly detectable heuristic fingerprint to Deep Packet Inspection (DPI) firewalls.
+
+The Initiator and Listener exchange the following 128-byte block:
+
+    [ 32 Bytes: Obfuscated Long-Term Public Key      ]
+    [ 32 Bytes: Ephemeral Public Key (Ristretto255)  ]
+    [ 64 Bytes: Obfuscated Detached Signature        ]
+
+**Cryptographic Obfuscation Rules:**
+1. **Long-Term PK:** The Ed25519 Long-Term Public Key MUST be mapped to a uniform random string of 32 bytes using the **Elligator 2** mapping algorithm prior to transmission.
+2. **Ephemeral PK:** The Ristretto255 group natively produces uniform representations and requires no further obfuscation.
+3. **Signature:** The Ed25519 detached signature consists of a curve point `R` and a scalar `S`. The point `R` MUST also be obfuscated using **Elligator 2** mapping to eliminate structural curve fingerprints.
+
+The receiving endpoint MUST blindly reverse the Elligator 2 mappings to recover the true Ed25519 key and signature `R` point before executing standard signature validation. Any failure in mapping inversion or signature validation MUST result in a Fail-Fast connection termination.
+
+## 5. Implicit Counter Protocol (Nonce Management)
+
+AETP v2.0.0 strictly prohibits the transmission of the AEAD Nonce over the wire. 
+
+Upon successful generation of the symmetric Session Keys (`tx_key`, `rx_key`), both endpoints **MUST** initialize two 64-bit unsigned integers in local memory:
+* `uint64_t tx_counter = 0;`
+* `uint64_t rx_counter = 0;`
+
+For every AEAD encryption operation, the 64-bit `tx_counter` is padded to the required Nonce size (24 bytes for XChaCha20) and incremented by `1`.
+For every AEAD decryption operation, the endpoint uses its local `rx_counter`, padding it identically, and increments it by `1` upon a successful Poly1305 MAC validation.
+
+*Security Note: This mathematically guarantees protection against replay attacks with zero wire-overhead. A replayed packet will fail the Poly1305 validation due to a Nonce mismatch in local memory.*
+
+## 6. Binary Framing: Dual-Block AEAD Model
+
+Once the handshake is complete, all application data MUST be encapsulated into a stream of contiguous, fully encrypted Dual-Block frames. 
+
+A single AETP Frame consists of:
+
+**Block 1: Encrypted Length Block (Exactly 18 Bytes)**
+
+[ 2 Bytes: Encrypted Length (N) ]
+[ 16 Bytes: Poly1305 MAC        ]
+
+* **Plaintext:** 2 bytes containing the length (`N`) of the upcoming payload.
+* **Ciphertext:** 2 bytes of encrypted length + 16 bytes of Poly1305 MAC.
+* *Behavior:* The receiving stream MUST blindly read exactly 18 bytes and decrypt this block to determine `N`.
+
+**Block 2: Encrypted Payload Block (Exactly N + 16 Bytes)**
+
+[ N Bytes: Ciphertext      ]
+[ 16 Bytes: Poly1305 MAC   ]
+
+* **Plaintext:** `N` bytes of actual application payload.
+* **Ciphertext:** `N` bytes of encrypted payload + 16 bytes of Poly1305 MAC.
+* *Behavior:* The receiving stream dynamically allocates a buffer of `N + 16` bytes, reads the payload block, and decrypts it.
+
+## 7. Lifecycle, Concurrency & Stream Serialization
+
+Because AETP relies on strict, stateful Implicit Counters, thread-safe write serialization is paramount.
+
+* **Stream Serialization Constraint:** Implementations **MUST** ensure that concurrent calls to send application data do not result in interleaved bytes on the underlying socket. 
+* Implementations **SHOULD** utilize an Asynchronous Send Queue and a dedicated, single-threaded write coroutine loop to flush frames into the socket sequentially, preserving the integrity of the `tx_counter`.
+
+## 8. Transport Obfuscation Profiles
+
+AETP is agnostic to the underlying stream, enabling modular transport layer obfuscation. Implementations MUST support the following profiles via configuration:
+
+* **Profile A (`RAW_AETP`):** The dual-block AEAD stream is written directly to a raw TCP socket (`boost::asio::ip::tcp::socket`). Used against firewalls relying solely on whitelist exclusions or when minimal CPU overhead is required.
+* **Profile B (`TLS_TUNNEL`):** The dual-block AEAD stream is piped into a TLS 1.3 stream proxy (`boost::asio::ssl::stream`). The OpenSSL kernel encapsulates the AETP noise into standard `0x17` Application Data records. Used for blending into commercial HTTPS traffic to bypass strict whitelisting DPI.
+
+## 9. Security Considerations
+
+* **Perfect Forward Secrecy (PFS):** Implementations **MUST** call `sodium_memzero()` (or equivalent memory wiping functions) on the `ephemeral_sk`, `rx_key`, and `tx_key` immediately upon entering the terminated state, object destruction, or encountering a MAC validation error.
+* **Fail-Fast Defense:** Under no circumstances SHALL the protocol return specific error codes (e.g., "Invalid Signature", "Length Too Large") over the wire. Any malformed byte MUST trigger a silent and immediate socket reset (`RST`).
+* **Length Obfuscation (Optional):** Implementations MAY pad the payload before encryption to mitigate traffic analysis based on packet sizes, though Profile B (`TLS_TUNNEL`) natively provides record boundary obfuscation.
+
+================================================================================
+FILE PATH: include\AEGIS\ArgParser.hpp
+
+================================================================================
+#include<stdio.h>
+#include<stdlib.h>
+#include<stdint.h>
+#include<iostream>
+#include<string>
+#include<optional>
+
+
+struct AegisConfig {
+    std::string listen_host="0.0.0.0";
+    uint16_t listen_port;
+
+};
+
+
+class ArgParser{
+    public:
+        static std::optional<AegisConfig> parse(int argc, char** argv);
+    private:
+        static void print_usage(const char* program_name);
+};
+
+
+================================================================================
 FILE PATH: include\AEGIS\CommandRouter.hpp
 
 ================================================================================
@@ -507,6 +661,7 @@ FILE PATH: include\AEGIS\SessionManager.hpp
 #include<deque>
 #include<functional>
 #include<set>
+#include<chrono>
 #include<AEGIS/Encryptor.hpp>
 #include<AEGIS/Utility.hpp>
 
@@ -601,7 +756,7 @@ class SessionManager{
         string current_session_id;
         map<string, shared_ptr<Session>> session_map;
         io_context &io;
-        std::set<string> tombstoned_ids;
+        std::map<string, std::chrono::steady_clock::time_point> tombstoned_ids; // 存储已清理会话的ID和清理时间点
         
     public:
         SessionManager(io_context &_io, Encryptor &encryptor);
@@ -609,18 +764,31 @@ class SessionManager{
         void new_session_from_socket_and_start(ip::tcp::socket socket);//从socket创建会话并直接发起会话
         inline io_context& get_io_context() { return io; }
         std::function<void(string)> on_send_message_handler;
-        bool is_tombstoned(const string& id) const {
-            return tombstoned_ids.find(id) != tombstoned_ids.end();
+        bool is_tombstoned(const string& id) {
+            auto it = tombstoned_ids.find(id);
+            if(it != tombstoned_ids.end()) {
+                auto tombstone_time = it->second;
+                auto now = std::chrono::steady_clock::now();
+                if(std::chrono::duration_cast<std::chrono::seconds>(now - tombstone_time).count() < 10) {
+                    return true;
+                } else {
+                    // 已经过了10秒，移除墓碑记录
+                    tombstoned_ids.erase(it);
+                    return false;
+                }
+            }
+            return false;
         }
         void promote_session(const string& tmp_id, const string& actual_id);
         bool if_has_session(const string& id) const {
             return session_map.find(id) != session_map.end();
         }
         std::function<void(string id)> on_session_cleaned_handler=[this](const string& id){
+            print_info(string("[INFO] Session with id ") + id + " cleaned up. Removing from session manager.");
             boost::asio::post(io, [this, id](){
                 size_t erased = session_map.erase(id);
                 if (erased > 0) {
-                    tombstoned_ids.insert(id);
+                    tombstoned_ids.insert({id, std::chrono::steady_clock::now()});
                     log_info(string("[INFO] Session with id ") + id + " cleaned and removed from session manager.");
                 } else {
                     log_warning(string("[WARN] Attempted to clean session with id ") + id + ", but it was not found in session manager.");
@@ -690,7 +858,7 @@ class TcpSender{
 
         AcceptHandler accept_handler;
     public:
-        TcpSender(io_context &_io, short port);
+        TcpSender(io_context &_io, short port=0, const string& host="0.0.0.0");
         void accept();
 
         void set_accept_handler(AcceptHandler handler) { accept_handler = handler; }
@@ -719,7 +887,7 @@ class UdpBroadcaster{
         UdpBroadcaster(io_context &_io, int port=12345);
         void broadcast(const string& msg);
         void wait(const boost::system::error_code& e, std::shared_ptr<string> shared_msg, short time=1);
-        void send_reply(const ip::udp::endpoint& target_ep, const string& msg);
+        void send_reply(const string& msg);
         
         void stop_broadcasting();
         
@@ -757,7 +925,7 @@ class UdpManager{
         const string my_id;
         const string my_tcp_port;
     public:
-        UdpManager(io_context& _io, Encryptor &encryptor, const string& available_tcp_port);
+        UdpManager(io_context& _io, Encryptor &encryptor, const string& available_tcp_port, const bool& if_do_udp_broadcast);
         void set_on_session_handler(function<void(const ip::tcp::endpoint&, const string&)> handler) { on_session_handler = handler; };
         void stop();
 };
@@ -870,13 +1038,13 @@ AEGIS is a high-performanced, decentralized and encrypted network engine based o
 
 ## Core Features
 
-- **Modern Async Architecture**: Using C++20 Coroutine and Boost.Asio and implementing a high-performanced network engine.
+- **Modern Async Architecture**: Using C++20 Coroutine and Boost.Asio and implementing a high-performance network engine.
 
 - **Double Engine Scheduling**: Integrated thread pool allows AEGIS's encryption runs in parallel without blocking the IO thread.
 
 - **High-Performance**: Deeply applied Move Semantics to reduce memory copy and dangling pointer.
 
-- **Self-Certifying and Decentralized**: Peer ID is based on the hash value (BLAKE3) of public key to reduce the risk of identity theft from the root.
+- **Self-Certifying and Decentralized**: Peer ID is based on the long-term public key's base64 to reduce the risk of identity theft from the root.
 
 - **Highly-Secured**: Integrated libsodium uses XChaCha20-Poly1305 for encryption and Ed25519 for digital signature.
 
@@ -888,7 +1056,7 @@ Environment requirements:
 - boost.asio,boost.json
 - libsodium
 
-`pwsh
+```pwsh
 
 git clone https://github.com/Herminos/Aegis.git
 
@@ -904,7 +1072,7 @@ cmake --build .
 
 ./AEGIS
 
-`
+```
 
 ================================================================================
 FILE PATH: src\crypto\Encryptor.cpp
@@ -1114,6 +1282,7 @@ FILE PATH: src\main.cpp
 #include<AEGIS/UdpManager.hpp>
 #include<AEGIS/InputManager.hpp>
 #include<AEGIS/CommandRouter.hpp>
+#include<AEGIS/ArgParser.hpp>
 
 using namespace boost::asio;
 
@@ -1136,6 +1305,11 @@ void print_banner(const string& id) {
 
 int main(int argc, char* argv[]) {
 
+    auto config=ArgParser::parse(argc, argv);
+    if(!config) {
+        return 1;
+    }
+    
     io_context io;
     thread_pool pool;
     Encryptor encryptor(pool);
@@ -1147,10 +1321,9 @@ int main(int argc, char* argv[]) {
         printf("Usage: %s <available_tcp_port>\n", argv[0]);
         return 1;
     }
-    available_tcp_port=argv[1];
-
-    UdpManager udp_manager(io, encryptor, available_tcp_port);
-    TcpSender tcp_sender(io, stoi(available_tcp_port));
+    bool if_do_udp_broadcast=(config->listen_host=="0.0.0.0");
+    UdpManager udp_manager(io, encryptor, available_tcp_port, if_do_udp_broadcast);
+    TcpSender tcp_sender(io, stoi(available_tcp_port), config->listen_host);
     InputManager input_manager;
     CommandRouter command_router;
 
@@ -1161,7 +1334,7 @@ int main(int argc, char* argv[]) {
         }
     );
     tcp_sender.accept();
-
+    
     udp_manager.set_on_session_handler(
         [&session_manager, &io](const ip::tcp::endpoint& remote_endpoint, const string& hash) {
             if(session_manager.is_tombstoned(hash)) {
@@ -1207,6 +1380,50 @@ int main(int argc, char* argv[]) {
     
     pool.join();
     system("pause");
+}
+
+================================================================================
+FILE PATH: src\Managers\ArgParser.cpp
+
+================================================================================
+#include<AEGIS/ArgParser.hpp>
+#include<string_view>
+#include<vector>
+#include<AEGIS/Utility.hpp>
+
+void ArgParser::print_usage(const char* program_name) {
+    std::cerr << "Usage: " << program_name << " [OPTIONS]" << std::endl;
+    std::cerr << "Options:" << std::endl;
+    std::cerr << "  --lan PORT        Set into UDP Broadcast Mode (ONLY FOR LAN)" << std::endl;
+    std::cerr << "  --listen          Set the host to listen on localhost (SSH)" << std::endl;
+    std::cerr << "  --help            Show this help message" << std::endl;
+}
+
+std::optional<AegisConfig> ArgParser::parse(int argc, char** argv) {
+    AegisConfig config;
+    std::vector<std::string_view> args(argv + 1, argv + argc);
+    for(int i=0; i<args.size(); i++){
+
+        if(args[i]=="-h" || args[i]=="--help"){
+            print_usage(argv[0]);
+            return std::nullopt;
+        }
+        else if(args[i]=="--lan"){
+            config.listen_host="0.0.0.0";
+            config.listen_port=std::stoi(std::string(args[++i]));
+        }
+        else if((args[i]=="-l" || args[i]=="--listen") && i+1<args.size()){
+            config.listen_host="127.0.0.1";
+        }
+        else{
+            print_usage(argv[0]);
+            return std::nullopt;
+        }
+
+    }
+
+
+    return config;
 }
 
 ================================================================================
@@ -1486,9 +1703,19 @@ boost::asio::awaitable<void> Session::start_read_loop_coroutine() {
         }
         
     }
-    catch(const exception &e){
-        log_warning(string("[WARN] Session ") + session_id + " (" + remote_endpoint.address().to_string() + ":" + to_string(remote_endpoint.port()) + ") encountered an error: " + e.what() + ". Closing session.");
-        close_session(boost::asio::error::connection_aborted);
+    catch (const boost::system::system_error& e) {
+        if (e.code() == boost::asio::error::eof || e.code() == boost::asio::error::connection_reset) {
+            log_info(string("[INFO] Session ") + session_id + " gracefully disconnected by peer (EOF).");
+            self->state = SessionState::TERMINATED;
+            self->clean_session();
+        } else {
+            log_warning(string("[WARN] Session ") + session_id + " error: " + e.what());
+            self->close_session(e.code());
+        }
+    }
+    catch(const std::exception &e){
+        log_warning(string("[WARN] Session ") + session_id + " logic error: " + e.what());
+        self->close_session(boost::asio::error::connection_aborted);
     }
 };
 
@@ -1560,11 +1787,6 @@ boost::asio::awaitable<void> Session::process_encrypted_data_coroutine(std::vect
     vector<uint8_t> plain_text = co_await encryptor.async_decrypt(move(cipher_and_mac), move(nonce), session_key_pair.rx_key, header);
     rx_counter = received_counter;
 
-    if(plain_text.empty()){
-        log_warning(string("[WARN] Received empty plaintext in session ") + session_id + ", ignoring.");
-        co_return;
-    }
-
     AETPPackageType type = static_cast<AETPPackageType>(plain_text[0]);
     string plain_message(plain_text.begin() + 1, plain_text.end());
 
@@ -1572,6 +1794,8 @@ boost::asio::awaitable<void> Session::process_encrypted_data_coroutine(std::vect
         if(!plain_message.empty()){
             print_info("[From " + session_id + " and terminated]: " + plain_message);
         }
+        boost::system::error_code ec;
+        socket.shutdown(boost::asio::ip::tcp::socket::shutdown_receive, ec);
         this->state = SessionState::TERMINATED;
         clean_session();
         co_return;
@@ -1588,30 +1812,7 @@ void Session::handle_incoming_message(const string& msg) {
 
 void Session::send_termination_package(string end_message) {
 
-    vector<uint8_t> nonce(crypto_aead_xchacha20poly1305_ietf_NPUBBYTES, 0);
-    std::memcpy(nonce.data(), &tx_counter, sizeof(tx_counter));
-    randombytes_buf(nonce.data() + 8, 16);
-    std::vector<uint8_t> end_message_v(end_message.begin(), end_message.end());
-    
-    boost::asio::co_spawn(
-        socket.get_executor(),
-        [self=shared_from_this(), end_message=std::move(end_message_v), nonce=std::move(nonce)]() mutable -> boost::asio::awaitable<void> {
-            try{
-                std::vector<uint8_t> cipher_and_mac = co_await self->encryptor.async_encrypt(std::move(end_message), self->session_key_pair.tx_key, nonce, build_header_from_payload_length(end_message.size() + crypto_aead_xchacha20poly1305_ietf_ABYTES + nonce.size(), __SENDING_ENCRYPTED_DATA));
-                std::vector<uint8_t> payload;
-                payload.reserve(nonce.size() + cipher_and_mac.size());
-                payload.insert(payload.end(), nonce.begin(), nonce.end());
-                payload.insert(payload.end(), cipher_and_mac.begin(), cipher_and_mac.end());
-
-                self->send_package(self->build_package_from_payload(std::move(payload), __SENDING_ENCRYPTED_DATA));
-            }
-            catch(const std::exception &e){
-                log_error(string("[ERROR] Failed to send termination package: ") + e.what());
-            }
-            co_return;
-        },
-        boost::asio::detached
-    );
+    send_message_with_tag(end_message, AETPPackageType::TERMINATION);
 }
 
 void Session::close_session(const boost::system::error_code& ec) {
@@ -1644,6 +1845,7 @@ void Session::clean_session() {
     if(state != SessionState::TERMINATED){
         return;
     }
+    print_info(string("[INFO] Cleaning session ") + session_id + " resources.");
     outgoing_package_queue.clear();
     peer_ephemeral_public_key.clear();
     session_key_pair.rx_key.clear();
@@ -1691,8 +1893,6 @@ void Session::start_write_loop(){
                     if(ec){
                         log_error(string("[ERROR] Failed to shutdown socket after sending termination package: ") + ec.message());
                     }
-                    self->state = SessionState::TERMINATED;
-                    self->clean_session();
                 }
             }
             catch(const std::exception &e){
@@ -1705,7 +1905,7 @@ void Session::start_write_loop(){
 
 void Session::send_message_with_tag(const string& msg, const AETPPackageType &type) {
     // 注意：如果是 TERMINATING 状态，只允许发送 FINAL 包
-    if(state != SessionState::ACTIVE && !(state == SessionState::TERMINATED && type == AETPPackageType::TERMINATION)){
+    if(state != SessionState::ACTIVE && !(state == SessionState::TERMINATING && type == AETPPackageType::TERMINATION)){
         print_info(string("[INFO] Session is not ACTIVE. Cannot send message."));
         return;
     }
@@ -1716,10 +1916,6 @@ void Session::send_message_with_tag(const string& msg, const AETPPackageType &ty
     plain_text.insert(plain_text.end(), msg.begin(), msg.end());
 
     std::vector<uint8_t> nonce(crypto_aead_xchacha20poly1305_ietf_NPUBBYTES, 0);
-    this->tx_counter++;
-    std::memcpy(nonce.data(), &this->tx_counter, sizeof(this->tx_counter));
-    randombytes_buf(nonce.data() + 8, 16);
-
     if(!socket.is_open()) return;
 
     std::array<uint8_t, 10> header = build_header_from_payload_length(plain_text.size() + crypto_aead_xchacha20poly1305_ietf_ABYTES + nonce.size(), __SENDING_ENCRYPTED_DATA);
@@ -1729,6 +1925,9 @@ void Session::send_message_with_tag(const string& msg, const AETPPackageType &ty
         socket.get_executor(),
         [self, plain_text=std::move(plain_text), nonce=std::move(nonce), header=std::move(header)]() mutable -> boost::asio::awaitable<void> {
             try {
+                self->tx_counter+=randombytes_random()%7+1;
+                std::memcpy(nonce.data(), &self->tx_counter, sizeof(self->tx_counter));
+                randombytes_buf(nonce.data() + 8, 16);
                 std::vector<uint8_t> cipher_and_mac = co_await self->encryptor.async_encrypt(std::move(plain_text), self->session_key_pair.tx_key, nonce, header);
                 
                 std::vector<uint8_t> payload;
@@ -1901,7 +2100,7 @@ using namespace std;
 
 
 
-TcpSender::TcpSender(io_context &_io, short port) : acceptor(_io, ip::tcp::endpoint(ip::tcp::v4(), port)), socket(_io) {
+TcpSender::TcpSender(io_context &_io, short port, const string& host="0.0.0.0") : acceptor(_io, ip::tcp::endpoint(ip::make_address(host), port)), socket(_io) {
 
 };
 
@@ -1943,8 +2142,10 @@ UdpBroadcaster::UdpBroadcaster(io_context &_io, int port)
     : socket(_io), timer(_io) 
 {
     socket.open(ip::udp::v4());
-    socket.set_option(socket_base::broadcast(true));
-    remote_endpoint = ip::udp::endpoint(ip::address_v4::broadcast(), port);
+    socket.set_option(ip::multicast::enable_loopback(true));
+    socket.set_option(ip::multicast::outbound_interface(ip::address_v4::any()));
+
+    remote_endpoint=ip::udp::endpoint(ip::make_address_v4("239.255.0.1"), port);
     //socket.bind(ip::udp::endpoint(ip::udp::v4(), port));
 }
 
@@ -2001,18 +2202,18 @@ void UdpBroadcaster::stop_broadcasting()
     if_still_broadcasting = false;
 }
 
-void UdpBroadcaster::send_reply(const ip::udp::endpoint& target_ep, const string& msg) {
+void UdpBroadcaster::send_reply(const string& msg) {
 
     auto shared_msg = make_shared<string>(msg);
 
     socket.async_send_to(
-        buffer(*shared_msg), target_ep,
-        [shared_msg, target_ep](const boost::system::error_code& e, std::size_t bytes_transferred) {
+        buffer(*shared_msg), remote_endpoint,
+        [shared_msg](const boost::system::error_code& e, std::size_t bytes_transferred) {
             if(e){
                 log_error(string("[ERROR] Error sending reply: ") + e.message());
                 return;
             }
-            log_info(string("[INFO] Reply sent %zu bytes to %s:%d") + to_string(bytes_transferred) + target_ep.address().to_string() + to_string(target_ep.port()));
+            log_info(string("[INFO] Reply sent %zu bytes to %s:%d") + to_string(bytes_transferred));
         }
 
         
@@ -2026,7 +2227,15 @@ UdpListener::UdpListener(io_context &io, function<void(const std::vector<char>&,
 {
     socket.open(ip::udp::v4());
     socket.set_option(socket_base::reuse_address(true));
+    #if defined(__APPLE__) || defined(__linux__)
+        typedef boost::asio::detail::socket_option::integer<SOL_SOCKET, SO_REUSEPORT> reuse_port;
+        socket.set_option(reuse_port(1));
+    #endif
     socket.bind(ip::udp::endpoint(ip::udp::v4(), port));
+    socket.set_option(ip::multicast::join_group(
+        ip::make_address_v4("239.255.0.1"),
+        ip::address_v4::any()
+    ));
     recv_buffer.resize(1024);
     
 }
@@ -2062,13 +2271,14 @@ string UdpManager::make_broadcast_content(){
     return boost::json::serialize(obj);
 };
 
-UdpManager::UdpManager(io_context& _io, Encryptor &encryptor, const string& available_tcp_port)
+UdpManager::UdpManager(io_context& _io, Encryptor &encryptor, const string& available_tcp_port, const bool& if_do_udp_broadcast)
   :  broadcaster(_io, 12345), listener(_io,
     [this](const std::vector<char>& msg, const ip::udp::endpoint& sender) {
         this->on_listened_handler(msg, sender);
     }
     ,12345), my_id(encryptor.get_id()), my_tcp_port(available_tcp_port)
 {
+    if(!if_do_udp_broadcast) return;//如果不做UDP广播的话构造函数立刻返回
     broadcaster.broadcast(make_broadcast_content());
     listener.listen();
 
@@ -2142,8 +2352,7 @@ void UdpManager::on_broadcast_handler(const boost::json::object& msg_obj, const 
 
     if(std::string_view(msg_obj.at("id").as_string()) > my_id){//此时对方哈希值比我方大，对方为发送方，我方需REPLY让对方创建连接
         log_info(string("[INFO] Received BROADCAST with smaller ID from ") + msg_obj.at("id").as_string().c_str() + ":" + msg_obj.at("port").as_string().c_str() + ", sending REPLY...");
-        ip::udp::endpoint target_ep(sender_ep.address(), 12345);
-        this->broadcaster.send_reply(target_ep, make_reply_content());
+        this->broadcaster.send_reply(make_reply_content());
     }
     else{//我方哈希值大于对方，我方创建连接
         this->on_session_handler(
@@ -2193,4 +2402,6 @@ void CommandRouter::handle_raw_input(const string& raw_msg) {
 FILE PATH: TODO.txt
 
 ================================================================================
-优化TERMINATION包逻辑，在密文里加入校验使其抗DoS攻击
+写一个命令解析，解析Aegis的URI来主动连接远程节点
+租一个垃圾云服务器，用ssh进行反向代理
+根据传入的公网云服务器ip的端口来生成Aegis的URI

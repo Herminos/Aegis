@@ -9,7 +9,6 @@
 #include<string>
 
 using namespace boost::asio;
-namespace json = boost::json;
 using namespace std;
 
 
@@ -18,7 +17,7 @@ UdpBroadcaster::UdpBroadcaster(io_context &_io, int port)
 {
     socket.open(ip::udp::v4());
     socket.set_option(ip::multicast::enable_loopback(true));
-    socket.set_option(ip::multicast::outbound_interface(ip::address_v4::loopback()));
+    socket.set_option(ip::multicast::outbound_interface(ip::address_v4::any()));
 
     remote_endpoint=ip::udp::endpoint(ip::make_address_v4("239.255.0.1"), port);
     //socket.bind(ip::udp::endpoint(ip::udp::v4(), port));
@@ -109,7 +108,7 @@ UdpListener::UdpListener(io_context &io, function<void(const std::vector<char>&,
     socket.bind(ip::udp::endpoint(ip::udp::v4(), port));
     socket.set_option(ip::multicast::join_group(
         ip::make_address_v4("239.255.0.1"),
-        ip::address_v4::loopback()
+        ip::address_v4::any()
     ));
     recv_buffer.resize(1024);
     

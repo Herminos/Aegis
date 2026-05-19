@@ -1,0 +1,11 @@
+CompileFlags:
+  CompilationDatabase: "build"
+  Add:
+    - -target
+    - x86_64-w64-mingw32
+    
+    - -isystem
+    - C:/msys64/clang64/include/c++/v1
+    
+    - -isystem
+    - C:/msys64/clang64/include

@@ -3,6 +3,8 @@ project(AEGIS)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
+set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
+
 
 # ==========================================
 # 第一步：寻找第三方密码学和网络库

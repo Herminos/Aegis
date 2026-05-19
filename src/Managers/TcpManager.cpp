@@ -1,7 +1,5 @@
 #include<boost/asio.hpp>
 #include<stdio.h>
-#include<vector>
-#include<memory>
 #include<functional>
 #include<AEGIS/TcpManager.hpp>
 #include<AEGIS/Utility.hpp>
@@ -11,9 +9,14 @@ using namespace std;
 
 
 
-TcpSender::TcpSender(io_context &_io, short port) : acceptor(_io, ip::tcp::endpoint(ip::tcp::v4(), port)), socket(_io) {
+TcpSender::TcpSender(io_context &_io, short port, const string& host) : acceptor(_io, ip::tcp::endpoint(ip::make_address(host), port)), socket(_io) {
 
 };
+
+void TcpSender::set_peer_socket(ip::tcp::socket peer_socket) {
+    remote_endpoint = peer_socket.remote_endpoint();
+    socket = std::move(peer_socket);
+}
 
 void TcpSender::accept() {
 
@@ -22,9 +25,9 @@ void TcpSender::accept() {
             log_error(string("[ERROR] Failed to accept incoming connection: ") + e.message());
             return;
         }
-        success_info(string("[INFO] Client connected: ") + peer_socket.remote_endpoint().address().to_string());
+        success_info(string("[INFO] Peer connected: ") + peer_socket.remote_endpoint().address().to_string());
         if (accept_handler) {
-            accept_handler(move(peer_socket));
+            accept_handler(std::move(peer_socket));
         }
         accept();
     });
