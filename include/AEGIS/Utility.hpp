@@ -1,6 +1,6 @@
 #pragma once
 
-#define CURRENT_VERSION "Alpha 0.1.0"
+#define CURRENT_VERSION "Alpha 1.0.0"
 
 #include<vector>
 #include<string>
