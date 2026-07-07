@@ -1,5 +1,4 @@
 #include<boost/asio.hpp>
-#include<stdio.h>
 #include<memory>
 #include<AEGIS/Encryptor.hpp>
 #include<AEGIS/Session.hpp>

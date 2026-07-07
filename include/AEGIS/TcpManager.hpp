@@ -4,25 +4,21 @@
 #include<vector>
 #include<functional>
 
-
-using namespace boost::asio;
-using namespace std;
-
-using AcceptHandler = function<void(ip::tcp::socket)>;
+using AcceptHandler = std::function<void(boost::asio::ip::tcp::socket)>;
 
 class TcpSender{
 
     private:
-        ip::tcp::socket socket;
-        ip::tcp::endpoint remote_endpoint;
-        ip::tcp::acceptor acceptor;
-        vector<char> recv_buffer;
+        boost::asio::ip::tcp::socket socket;
+        boost::asio::ip::tcp::endpoint remote_endpoint;
+        boost::asio::ip::tcp::acceptor acceptor;
+        std::vector<char> recv_buffer;
 
         AcceptHandler accept_handler;
     public:
-        TcpSender(io_context &_io, short port=0, const string& host="0.0.0.0");
+        TcpSender(boost::asio::io_context &_io, short port=0, const std::string& host="0.0.0.0");
         void accept();
-        void set_peer_socket(ip::tcp::socket peer_socket);
+        void set_peer_socket(boost::asio::ip::tcp::socket peer_socket);
 
         void set_accept_handler(AcceptHandler handler) { accept_handler = handler; }
         unsigned short get_listen_port() { return acceptor.local_endpoint().port(); }

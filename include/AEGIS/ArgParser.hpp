@@ -1,6 +1,7 @@
+#pragma once
+
 #include<stdint.h>
 #include<string>
-
 
 struct AegisConfig {
     bool is_vaild=false;

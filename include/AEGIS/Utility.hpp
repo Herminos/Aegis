@@ -7,7 +7,6 @@
 #include<sodium.h>
 #include<stdexcept>
 
-using namespace std;
 
 const std::string RESET   = "\033[0m";
 const std::string RED     = "\033[31m";
@@ -75,19 +74,19 @@ inline uint16_t calculate_header_crc16(const uint8_t* data, size_t length) {
     return crc;
 }
 
-inline void log_error(const string& error) {
+inline void log_error(const std::string& error) {
     printf("%s\n", (RED + error + RESET).c_str()); 
 }
-inline void log_warning(const string& warning) {
+inline void log_warning(const std::string& warning) {
     printf("%s\n", (YELLOW + warning + RESET).c_str());
 }
-inline void log_info(const string& info) {
+inline void log_info(const std::string& info) {
     //printf("%s\n", info.c_str());
 }
-inline void print_info(const string& info) {
+inline void print_info(const std::string& info) {
     printf("%s\n", info.c_str());
 }
 
-inline void success_info(const string& success) {
+inline void success_info(const std::string& success) {
     printf("%s\n", (GREEN + success + RESET).c_str());
 }

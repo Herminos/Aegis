@@ -10,6 +10,7 @@
 #include<AEGIS/ArgParser.hpp>
 
 using namespace boost::asio;
+using namespace std;
 
 const string banner=R"(
     ___    ______ ______ ____ _____
