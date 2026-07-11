@@ -56,6 +56,7 @@ class Session:public std::enable_shared_from_this<Session>
         std::function<void(std::string)> on_close_handler;
         std::function<void(std::string, std::string)> on_session_promotion_handler;
         std::function<void(std::string)> on_session_cleaned_handler;
+        std::function<void(std::string, std::string)> on_message_received_handler; // (session_id, msg)
 
         void send_message_with_tag(const std::string& msg, const AETPPackageType &type);
         
@@ -76,6 +77,7 @@ class Session:public std::enable_shared_from_this<Session>
         void set_on_close_handler(std::function<void(std::string)> handler) { on_close_handler = handler; }
         void set_on_session_promotion_handler(std::function<void(std::string, std::string)> handler) { on_session_promotion_handler = handler; }
         void set_on_session_cleaned_handler(std::function<void(std::string)> handler) { on_session_cleaned_handler = handler; }
+        void set_on_message_received_handler(std::function<void(std::string, std::string)> handler) { on_message_received_handler = handler; }
         boost::asio::awaitable<void> start_read_loop_coroutine();
         
         void close_session(const boost::system::error_code& ec);

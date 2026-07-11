@@ -59,3 +59,9 @@ void UiDispatcher::on_error(std::string msg) {
         ui->on_error(std::move(msg));
     });
 };
+
+void UiDispatcher::on_success(std::string msg) {
+    boost::asio::post(ui_io, [this, msg = std::move(msg)]() {
+        ui->on_success(std::move(msg));
+    });
+};

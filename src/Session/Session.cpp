@@ -349,8 +349,12 @@ boost::asio::awaitable<void> Session::process_encrypted_data_coroutine(std::vect
 };
 
 void Session::handle_incoming_message(const string& msg) {
-    print_info(string("\r\n[From " + session_id + "]: ") + msg);
-    // 这里可以添加更多的消息处理
+    if (on_message_received_handler) {
+        on_message_received_handler(session_id, msg);
+    } else {
+        // 回退到终端输出（向后兼容）
+        print_info(string("\r\n[From " + session_id + "]: ") + msg);
+    }
 };
 
 void Session::send_termination_package(string end_message) {

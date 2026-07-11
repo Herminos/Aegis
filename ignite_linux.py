@@ -11,8 +11,8 @@ from pathlib import Path
 EXE_NAME = "AEGIS"
 BUILD_DIR = Path("./build")
 RUN_DIR = Path("./run")
-PORT_A = "8080"
-PORT_B = "8081"
+PORT_A = "7890"
+PORT_B = "7890"
 
 # Linux 下常见的终端模拟器及其启动命令
 TERMINALS = [
@@ -94,30 +94,28 @@ def launch():
 
     node_a, node_b = nodes
 
-    print(f"🚀 正在点火：启动节点 A (端口 {PORT_A}) 和节点 B (端口 {PORT_B}) ...")
+    print(f"🚀 正在点火：节点 A --listen {PORT_A}  /  节点 B --connect 127.0.0.1:{PORT_B} ...")
 
     # 启动节点 A：在新终端中保持进程存活
-    cmd_a = f"\"{node_a.absolute()}\" {PORT_A}; echo '节点 A 已退出，按 Enter 关闭...'; read"
+    cmd_a = f"\"{node_a.absolute()}\" --listen {PORT_A}; echo '节点 A 已退出，按 Enter 关闭...'; read"
     process_a = subprocess.Popen(
         [term_name] + term_args + [cmd_a],
         stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL,
     )
 
     # 稍等让第一个节点发出 UDP 广播
     time.sleep(1.5)
 
     # 启动节点 B
-    cmd_b = f"\"{node_b.absolute()}\" {PORT_B}; echo '节点 B 已退出，按 Enter 关闭...'; read"
+    cmd_b = f"\"{node_b.absolute()}\" --connect 127.0.0.1:{PORT_B}; echo '节点 B 已退出，按 Enter 关闭...'; read"
     process_b = subprocess.Popen(
         [term_name] + term_args + [cmd_b],
         stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL,
     )
 
     print("\n🔥 AEGIS 节点已在独立终端窗口中运行。")
-    print(f"   节点 A → 端口 {PORT_A}")
-    print(f"   节点 B → 端口 {PORT_B}")
+    print(f"   节点 A → --listen {PORT_A}（服务端）")
+    print(f"   节点 B → --connect 127.0.0.1:{PORT_B}（客户端）")
     print("等待 AETP 握手日志 (Ed25519 Verified -> ACTIVE) ...")
     print("\n按 Ctrl+C 关闭所有节点窗口。")
 
