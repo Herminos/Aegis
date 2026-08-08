@@ -3,17 +3,20 @@
 #include<sodium.h>
 #include<AEGIS/Encryptor.hpp>
 #include<AEGIS/Utility.hpp>
+#include<string>
+#include<fstream>
+#include<filesystem>
 
 using namespace std;
 using namespace boost::asio;
 
-Encryptor::Encryptor(thread_pool& pool) : _thread_pool(pool)
+Encryptor::Encryptor(thread_pool& pool, const string& key_pair_path) : _thread_pool(pool)
 {
     if(sodium_init() < 0) {
         throw std::runtime_error("[ERROR] Failed to initialize libsodium.");
     }
     
-    load_identity_key_pair();
+    load_identity_key_pair(key_pair_path);
 
 }
 
@@ -23,14 +26,67 @@ string Encryptor::get_id() {
 }
 
 void Encryptor::generate_identity_key_pair() {
-    public_key.resize(crypto_sign_PUBLICKEYBYTES);
-    private_key.resize(crypto_sign_SECRETKEYBYTES);
-    crypto_sign_keypair(public_key.data(), private_key.data());
+    identity_seed.resize(crypto_sign_SEEDBYTES);
+    randombytes_buf(identity_seed.data(), crypto_sign_SEEDBYTES);
+    derive_keys_from_seed();
 }
 
-void Encryptor::load_identity_key_pair() {
-    //写一个判断是否有现成的PEM来加载
-    generate_identity_key_pair();
+void Encryptor::derive_keys_from_seed() {
+    public_key.resize(crypto_sign_PUBLICKEYBYTES);
+    private_key.resize(crypto_sign_SECRETKEYBYTES);
+    if (crypto_sign_seed_keypair(public_key.data(), private_key.data(), identity_seed.data()) != 0) {
+        throw std::runtime_error("crypto_sign_seed_keypair failed.");
+    }
+}
+
+void Encryptor::load_identity_key_pair(const string& key_seed_path) {
+    if (key_seed_path.empty()) {
+        log_warning("Key seed path not specified, generating a new identity key pair...");
+        generate_identity_key_pair();
+        return;
+    }
+    load_seed_from_file(key_seed_path);
+}
+
+void Encryptor::load_seed_from_file(const string& path) {
+    filesystem::path seed_path(path);
+    if (!filesystem::exists(seed_path)) {
+        log_error("Seed file does not exist: " + seed_path.string());
+        throw std::runtime_error("Seed file does not exist: " + seed_path.string());
+    }
+
+    identity_seed.resize(crypto_sign_SEEDBYTES);
+    std::ifstream file(seed_path, std::ios::binary);
+    if (!file) {
+        log_error("Cannot open seed file: " + seed_path.string());
+        throw std::runtime_error("Cannot open seed file: " + seed_path.string());
+    }
+    file.read(reinterpret_cast<char*>(identity_seed.data()), crypto_sign_SEEDBYTES);
+    if (file.gcount() != crypto_sign_SEEDBYTES) {
+        log_error("Seed file has wrong size: " + seed_path.string());
+        throw std::runtime_error("Seed file has wrong size (expected " + to_string(crypto_sign_SEEDBYTES) + " bytes).");
+    }
+
+    derive_keys_from_seed();
+    log_info("Identity loaded from seed. Node ID: " + get_id());
+}
+
+void Encryptor::save_seed_to_file(const string& path) {
+    filesystem::path seed_path(path);
+    filesystem::create_directories(seed_path.parent_path());
+
+    identity_seed.resize(crypto_sign_SEEDBYTES);
+    randombytes_buf(identity_seed.data(), crypto_sign_SEEDBYTES);
+
+    std::ofstream file(seed_path, std::ios::binary);
+    if (!file) {
+        log_error("Cannot write seed file: " + seed_path.string());
+        throw std::runtime_error("Cannot write seed file: " + seed_path.string());
+    }
+    file.write(reinterpret_cast<const char*>(identity_seed.data()), crypto_sign_SEEDBYTES);
+
+    derive_keys_from_seed();
+    log_info("New identity seed saved to: " + seed_path.string() + " | Node ID: " + get_id());
 }
 
 EphemeralKeyPair Encryptor::generate_ephemeral_keypair() {

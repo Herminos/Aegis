@@ -11,6 +11,8 @@ struct AegisConfig {
 
     std::string connect_host;
     uint16_t connect_port;
+
+    std::string seed_path;
 };
 
 

@@ -120,7 +120,7 @@ int main(int argc, char* argv[]) {
 
     io_context io;
     thread_pool pool;
-    Encryptor encryptor(pool);
+    Encryptor encryptor(pool, config.seed_path);
     SessionManager session_manager(io, encryptor);
     bool if_do_udp_broadcast=(config.listen_host=="0.0.0.0");
 
@@ -140,6 +140,7 @@ int main(int argc, char* argv[]) {
     AegisEngine engine;
     engine.session_manager = &session_manager;
     engine.udp_manager = &udp_manager;
+    engine.encryptor = &encryptor;
 
     auto console_ui = std::make_unique<ConsoleUI>(engine);
     UiDispatcher ui_dispatcher(ui_io, std::move(console_ui));

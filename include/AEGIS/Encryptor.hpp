@@ -17,7 +17,7 @@ struct SessionKeyPair{
 
 class Encryptor {
     public:
-        Encryptor(boost::asio::thread_pool &pool);
+        Encryptor(boost::asio::thread_pool &pool, const std::string& key_seed_path="");
         boost::asio::awaitable<std::vector<uint8_t>> async_encrypt(std::vector<uint8_t> data, std::vector<uint8_t> key, std::vector<uint8_t> nonce, std::array<uint8_t, 10> header);
         boost::asio::awaitable<std::vector<uint8_t>> async_decrypt(std::vector<uint8_t> cipher_and_mac, std::vector<uint8_t> nonce, std::vector<uint8_t> key, std::array<uint8_t, 10> header);
         std::vector<uint8_t> public_key;
@@ -38,9 +38,13 @@ class Encryptor {
                                 std::vector<uint8_t>& my_ephemeral_sk
                             );
         std::string get_id();
+        void load_seed_from_file(const std::string& path);   // 从文件读种子，派生新密钥
+        void save_seed_to_file(const std::string& path);     // 生成新种子，写入文件，派生密钥
     private:
         void generate_identity_key_pair();
-        void load_identity_key_pair();
+        void load_identity_key_pair(const std::string& key_seed_path);
+        void derive_keys_from_seed();
+        std::vector<uint8_t> identity_seed;                  // 32 字节 Ed25519 种子
         std::vector<uint8_t> do_encrypt(const std::vector<uint8_t>& data, const std::vector<uint8_t>& public_key, const std::vector<uint8_t>& nonce, const std::array<uint8_t, 10>& header);
         std::vector<uint8_t> do_decrypt(const std::vector<uint8_t>& cipher_and_mac, const std::vector<uint8_t> nonce, const std::vector<uint8_t> key, const std::array<uint8_t, 10>& header);
 

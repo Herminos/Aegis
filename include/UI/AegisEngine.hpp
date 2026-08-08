@@ -4,6 +4,7 @@
 
 class SessionManager;
 class UdpManager;
+class Encryptor;
 
 class AegisEngine {
 public:
@@ -17,4 +18,5 @@ public:
     // 依赖注入
     SessionManager* session_manager = nullptr;
     UdpManager* udp_manager = nullptr;
+    Encryptor* encryptor = nullptr;
 };
