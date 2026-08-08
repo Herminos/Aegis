@@ -24,7 +24,7 @@ Environment requirements:
 - boost
 - libsodium
 
-```pwsh
+```bash
 
 git clone https://github.com/Herminos/Aegis.git
 
@@ -47,6 +47,10 @@ make -j$(nproc)
 - If peers are in the same LAN, use `--lan` to set into UDP Broadcast Mode to quickly find peers (Actually multicast is used under the hood).
 
 - If peers are in different LANs, you may need a VPS which has a public IP to create a SSH reverse tunnel or run frp for you, then use `--listen` and `--connect` to set the host to listen on localhost and connect to your VPS.
+
+## Liscense
+
+AEGIS Alpha 1.0.0 is released under MIT License, but all the future releases will be under AGPL-3.0.
 
 ## Future
 
